@@ -1,0 +1,10 @@
+bin/
+obj/
+publish/
+app_asar/
+broadcast_patch/
+NoiseToggle.Installer/Payload/*.zip
+*.user
+*.pdb
+scratch-*.js
+broadcast-debug*.json
