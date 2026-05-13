@@ -52,7 +52,7 @@ internal sealed class TrayAppContext : ApplicationContext
             ContextMenuStrip = menu,
             Visible = true
         };
-        _trayIcon.DoubleClick += async (_, _) => await ToggleAsync();
+        _trayIcon.DoubleClick += (_, _) => ShowSettings();
 
         _hotkey.Pressed += async (_, _) => await ToggleAsync();
         _gameMonitorTimer.Interval = 5000;
