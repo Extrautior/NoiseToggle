@@ -24,6 +24,8 @@ internal static class GameScanner
         "\\steam\\",
         "\\steamapps\\",
         "\\epic games\\",
+        "\\games\\",
+        "\\gog games\\",
         "\\ea games\\",
         "\\ubisoft\\",
         "\\gog galaxy\\",
@@ -66,6 +68,32 @@ internal static class GameScanner
         "anticheat",
         "helper",
         "bootstrapper"
+    ];
+
+    private static readonly string[] ExcludedDisplayNameParts =
+    [
+        "launcher",
+        "redistributable",
+        "prerequisite",
+        "online services",
+        "sdk",
+        "driver",
+        "runtime",
+        "framework",
+        "update",
+        "updater",
+        "service",
+        "tool",
+        "editor",
+        "server",
+        "benchmark",
+        "microsoft visual c++",
+        "microsoft .net",
+        "nvidia",
+        "steamworks",
+        "epic online services",
+        "easy anti-cheat",
+        "battleye"
     ];
 
     public static List<GameCandidate> ScanInstalledShortcuts()
@@ -159,6 +187,11 @@ internal static class GameScanner
 
                     var installLocation = subKey.GetValue("InstallLocation") as string;
                     var displayIcon = CleanIconPath(subKey.GetValue("DisplayIcon") as string);
+                    if (!IsLikelyGameRegistryEntry(installLocation, displayIcon))
+                    {
+                        continue;
+                    }
+
                     var exePath = File.Exists(displayIcon) &&
                                   displayIcon.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
                                   !IsExcludedExecutable(displayIcon)
@@ -463,12 +496,23 @@ internal static class GameScanner
     private static bool IsExcludedDisplayName(string displayName)
     {
         var name = displayName.ToLowerInvariant();
-        return name.Contains("launcher") ||
-               name.Contains("redistributable") ||
-               name.Contains("prerequisite") ||
-               name.Contains("online services") ||
-               name.Contains("sdk") ||
-               name.Contains("driver");
+        return ExcludedDisplayNameParts.Any(name.Contains);
+    }
+
+    private static bool IsLikelyGameRegistryEntry(string? installLocation, string? displayIcon)
+    {
+        return IsInterestingGamePath(installLocation) || IsInterestingGamePath(displayIcon);
+    }
+
+    private static bool IsInterestingGamePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var lower = path.ToLowerInvariant();
+        return InterestingPathParts.Any(lower.Contains);
     }
 
     private static string? TryResolveShortcut(string shortcutPath)
