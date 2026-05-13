@@ -8,6 +8,26 @@ $backupAsar = Join-Path $broadcastResources "app.asar.noisetoggle-backup"
 $workDir = Join-Path $env:TEMP ("NoiseToggleBroadcastPatch-" + [Guid]::NewGuid().ToString("N"))
 $broadcastExe = "C:\Program Files\NVIDIA Corporation\NVIDIA Broadcast\NVIDIA Broadcast.exe"
 
+function Start-BroadcastHiddenDetached {
+    param([string]$ExePath)
+
+    if (-not (Test-Path -LiteralPath $ExePath)) {
+        return
+    }
+
+    $logDir = Join-Path $env:APPDATA "NoiseToggle"
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    $stdout = Join-Path $logDir "NvidiaBroadcastBridge.stdout.log"
+    $stderr = Join-Path $logDir "NvidiaBroadcastBridge.stderr.log"
+
+    Start-Process `
+        -FilePath $ExePath `
+        -ArgumentList "--launch-hidden" `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr
+}
+
 if (-not (Test-Path -LiteralPath $patchScript)) {
     throw "patch-broadcast-bridge.js must be next to this installer script."
 }
@@ -48,9 +68,7 @@ try {
     npx --yes asar pack $extractDir $patchedAsar
     Copy-Item -LiteralPath $patchedAsar -Destination $targetAsar -Force
 
-    if (Test-Path -LiteralPath $broadcastExe) {
-        Start-Process -FilePath $broadcastExe -ArgumentList "--launch-hidden" -WindowStyle Hidden
-    }
+    Start-BroadcastHiddenDetached -ExePath $broadcastExe
 
     Write-Host "NoiseToggle NVIDIA Broadcast bridge installed."
 }
