@@ -14,6 +14,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _startupItem;
     private readonly System.Windows.Forms.Timer _gameMonitorTimer = new();
     private string? _activeGameProcess;
+    private AudioStateSnapshot? _preGameState;
     private bool _busy;
 
     public TrayAppContext()
@@ -137,8 +138,19 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private async Task CheckGameMonitorAsync()
     {
+        if (_busy)
+        {
+            return;
+        }
+
         if (!_settings.AutoSwitchForGames || _settings.GameRules.Count == 0)
         {
+            if (_preGameState is not null)
+            {
+                AppLog.Info("Auto game monitor disabled while a game rule was active; restoring captured pre-game state.");
+                await RestorePreGameStateAsync();
+            }
+
             _activeGameProcess = null;
             return;
         }
@@ -154,9 +166,15 @@ internal sealed class TrayAppContext : ApplicationContext
 
         if (activeRule is null)
         {
-            AppLog.Info("Auto game monitor returning to Broadcast mode.");
-            await SwitchToModeAsync(ToggleMode.Broadcast, showBalloon: false);
+            AppLog.Info("Auto game monitor detected game exit.");
+            await RestorePreGameStateAsync();
             return;
+        }
+
+        if (_preGameState is null)
+        {
+            _preGameState = await CaptureCurrentAudioStateAsync();
+            AppLog.Info($"Auto game monitor captured pre-game state: {_preGameState}.");
         }
 
         AppLog.Info($"Auto game monitor applying rule for {activeRule.ProcessName}: {activeRule.ActionText}.");
@@ -211,19 +229,118 @@ internal sealed class TrayAppContext : ApplicationContext
             var successes = await ApplyStatesAsync(rule.BroadcastNoiseRemovalEnabled, rule.KrispEnabled, failures);
             if (successes > 0)
             {
-                _settings.LastMode = rule.KrispEnabled && !rule.BroadcastNoiseRemovalEnabled ? ToggleMode.Krisp : ToggleMode.Broadcast;
-                _settings.Save();
                 UpdateStatus($"Game: {rule.ProcessName}");
+                AppLog.Info($"Auto game monitor applied game rule for {rule.ProcessName}: {rule.ActionText}.");
             }
 
             if (failures.Count > 0)
             {
                 AppLog.Info($"Auto game monitor partial failure: {string.Join("; ", failures)}");
+                ShowBalloon("NoiseToggle game rule partial failure", string.Join(Environment.NewLine, failures), ToolTipIcon.Warning);
             }
         }
         catch (Exception ex)
         {
             AppLog.Error("Auto game monitor failed.", ex);
+        }
+        finally
+        {
+            _toggleItem.Enabled = true;
+            _busy = false;
+        }
+    }
+
+    private async Task<AudioStateSnapshot> CaptureCurrentAudioStateAsync()
+    {
+        bool? broadcast = null;
+        bool? krisp = null;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            broadcast = await _broadcast.GetNoiseRemovalStateAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Could not capture pre-game NVIDIA Broadcast state.", ex);
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            krisp = await _discord.GetKrispStateAsync(cts.Token);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Could not capture pre-game Discord Krisp state.", ex);
+        }
+
+        return new AudioStateSnapshot(broadcast, krisp);
+    }
+
+    private async Task RestorePreGameStateAsync()
+    {
+        if (_preGameState is null)
+        {
+            return;
+        }
+
+        if (_busy)
+        {
+            return;
+        }
+
+        var snapshot = _preGameState;
+        _preGameState = null;
+        _busy = true;
+        _toggleItem.Enabled = false;
+        var failures = new List<string>();
+        var successes = 0;
+
+        try
+        {
+            UpdateStatus("Restoring pre-game audio...");
+            AppLog.Info($"Auto game monitor restoring pre-game state: {snapshot}.");
+
+            if (snapshot.BroadcastNoiseRemovalEnabled is bool broadcast)
+            {
+                if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcast, token), failures, TimeSpan.FromSeconds(10)))
+                {
+                    successes++;
+                }
+            }
+            else
+            {
+                failures.Add("NVIDIA Broadcast: previous state was unknown");
+            }
+
+            if (snapshot.KrispEnabled is bool krisp)
+            {
+                if (await TryRunStepAsync("Discord Krisp", token => _discord.SetKrispStateAsync(krisp, token), failures, TimeSpan.FromSeconds(5)))
+                {
+                    successes++;
+                }
+            }
+            else
+            {
+                failures.Add("Discord Krisp: previous state was unknown");
+            }
+
+            if (successes > 0)
+            {
+                AppLog.Info("Auto game monitor restored pre-game state.");
+                UpdateStatus($"Mode: {_settings.LastMode} ({_settings.Hotkey})");
+            }
+
+            if (failures.Count > 0)
+            {
+                AppLog.Info($"Auto game monitor restore partial failure: {string.Join("; ", failures)}");
+                ShowBalloon("NoiseToggle restore partial failure", string.Join(Environment.NewLine, failures), ToolTipIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Auto game monitor restore failed.", ex);
         }
         finally
         {
@@ -387,5 +504,13 @@ internal sealed class TrayAppContext : ApplicationContext
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         base.ExitThreadCore();
+    }
+
+    private sealed record AudioStateSnapshot(bool? BroadcastNoiseRemovalEnabled, bool? KrispEnabled)
+    {
+        public override string ToString()
+        {
+            return $"Broadcast={(BroadcastNoiseRemovalEnabled?.ToString() ?? "unknown")}, Krisp={(KrispEnabled?.ToString() ?? "unknown")}";
+        }
     }
 }

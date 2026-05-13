@@ -8,10 +8,17 @@ const root = process.env.NOISETOGGLE_BROADCAST_APP_DIR
     : path.resolve('broadcast_patch/app');
 const mainPath = path.join(root, 'build/electron/main.js');
 let main = fs.readFileSync(mainPath, 'utf8');
-const marker = '/* NoiseToggle Broadcast Bridge v4 */';
+const marker = '/* NoiseToggle Broadcast Bridge v5 */';
 if (main.includes(marker)) {
   console.log('Bridge already present');
   process.exit(0);
+}
+
+for (const oldMarker of ['/* NoiseToggle Broadcast Bridge v4 */', '/* NoiseToggle Broadcast Bridge v5 */']) {
+  const markerIndex = main.indexOf(oldMarker);
+  if (markerIndex >= 0) {
+    main = main.slice(0, markerIndex).replace(/;\s*$/, '');
+  }
 }
 
 const bridge = `
@@ -52,6 +59,50 @@ const bridge = `
         req.on('error', reject);
       });
     }
+    function ntReadPersistedState() {
+      try {
+        const appSettings = ntPath.join(process.env.APPDATA || '', 'nvidia-broadcast', 'AppSetting.json');
+        const json = JSON.parse(ntFs.readFileSync(appSettings, 'utf8'));
+        const enabled = json && json.AppStorage && json.AppStorage.MaxineEffects && json.AppStorage.MaxineEffects.MicrophoneEffects && json.AppStorage.MaxineEffects.MicrophoneEffects.microphoneNoiseRemoval && json.AppStorage.MaxineEffects.MicrophoneEffects.microphoneNoiseRemoval.enabled;
+        return typeof enabled === 'boolean' ? enabled : null;
+      } catch (_) {
+        return null;
+      }
+    }
+    async function ntRendererState() {
+      if (!mainWin || mainWin.isDestroyed()) return { ok:false, error:'main-window-not-ready' };
+      const script = [
+        '(async function(){',
+        'function text(el){ return ((el && el.textContent) || \"\").replace(/\\\\s+/g, \" \").trim(); }',
+        'function state(el){',
+        '  if (!el) return null;',
+        '  if (typeof el.checked === \"boolean\") return el.checked;',
+        '  const aria = el.getAttribute && el.getAttribute(\"aria-checked\");',
+        '  if (aria === \"true\") return true;',
+        '  if (aria === \"false\") return false;',
+        '  const cls = String(el.className || \"\").toLowerCase();',
+        '  if (/(checked|enabled|active|on)/.test(cls) && !/(unchecked|disabled|off)/.test(cls)) return true;',
+        '  if (/(unchecked|disabled|off)/.test(cls)) return false;',
+        '  return null;',
+        '}',
+        'function controlsNear(label){',
+        '  const out = [];',
+        '  let node = label;',
+        '  for (let i = 0; node && i < 8; i++, node = node.parentElement) out.push(...node.querySelectorAll(\"input[type=checkbox], [role=switch], [aria-checked], button\"));',
+        '  return [...new Set(out)];',
+        '}',
+        'let labels = [...document.querySelectorAll(\"body *\")].filter(el => /noise removal/i.test(text(el))).sort((a,b) => text(a).length - text(b).length);',
+        'let controls = [];',
+        'for (const label of labels) controls.push(...controlsNear(label));',
+        'controls = [...new Set(controls)].filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });',
+        'let target = controls.find(el => state(el) !== null) || controls[0];',
+        'if (!target) return { ok:false, error:\"toggle-not-found\", labels: labels.length, controls: controls.length };',
+        'const enabled = state(target);',
+        'return { ok: typeof enabled === \"boolean\", enabled, tag: target.tagName, role: target.getAttribute(\"role\"), labels: labels.length, controls: controls.length };',
+        '})()'
+      ].join('\\n');
+      return await mainWin.webContents.executeJavaScript(script, true);
+    }
     async function ntRendererToggle(enabled) {
       if (!mainWin || mainWin.isDestroyed()) return { ok:false, error:'main-window-not-ready' };
       const script = [
@@ -67,6 +118,7 @@ const bridge = `
         '  if (aria === \"false\") return false;',
         '  const cls = String(el.className || \"\").toLowerCase();',
         '  if (/(checked|enabled|active|on)/.test(cls) && !/(unchecked|disabled|off)/.test(cls)) return true;',
+        '  if (/(unchecked|disabled|off)/.test(cls)) return false;',
         '  return null;',
         '}',
         'function controlsNear(label){',
@@ -86,10 +138,21 @@ const bridge = `
         'if (before !== desired) target.click();',
         'let after = state(target);',
         'for (let i = 0; i < 12 && after !== desired; i++) { await wait(250); after = state(target); }',
-        'return { ok: after === desired || after === null, before, after, tag: target.tagName, role: target.getAttribute(\"role\"), labels: labels.length, controls: controls.length };',
+        'return { ok: after === desired, enabled: after, before, after, tag: target.tagName, role: target.getAttribute(\"role\"), labels: labels.length, controls: controls.length };',
         '})()'
       ].join('\\n');
       return await mainWin.webContents.executeJavaScript(script, true);
+    }
+    async function ntGetNoiseRemoval() {
+      try {
+        const renderer = await ntRendererState();
+        if (renderer && renderer.ok && typeof renderer.enabled === 'boolean') return { ok:true, enabled: renderer.enabled, source:'renderer', renderer };
+      } catch (e) {
+        try { log && log.warn && log.warn('NoiseToggle bridge live read failed', e); } catch (_) {}
+      }
+      const persisted = ntReadPersistedState();
+      if (typeof persisted === 'boolean') return { ok:true, enabled: persisted, source:'persisted' };
+      return { ok:false, enabled:null, source:'unknown', error:'state-unavailable' };
     }
     async function ntSetNoiseRemoval(enabled) {
       try {
@@ -98,12 +161,14 @@ const bridge = `
         log && log.warn && log.warn('NoiseToggle bridge persistence update failed', e);
       }
       let renderer = await ntRendererToggle(enabled);
-      return { ok: !!(renderer && renderer.ok), renderer };
+      if (renderer && renderer.ok && renderer.enabled === enabled) return { ok:true, enabled, source:'renderer', renderer };
+      let verified = await ntGetNoiseRemoval();
+      return { ok: !!(verified && verified.ok && verified.enabled === enabled), enabled: verified.enabled, source: verified.source, renderer, verified };
     }
     async function ntDebug() {
       const data = {
         ok: true,
-        version: 4,
+        version: 5,
         hasMainWindow: !!(mainWin && !mainWin.isDestroyed()),
         mainWindowUrl: mainWin && !mainWin.isDestroyed() ? mainWin.webContents.getURL() : null,
         backendKeys: [],
@@ -140,6 +205,7 @@ const bridge = `
         const url = new URL(req.url, 'http://127.0.0.1:' + ntPort);
         if (req.method === 'GET' && url.pathname === '/noisetoggle/v1/health') return ntJson(res, 200, { ok:true });
         if (req.method === 'GET' && url.pathname === '/noisetoggle/v1/debug') return ntJson(res, 200, await ntDebug());
+        if (req.method === 'GET' && url.pathname === '/noisetoggle/v1/microphone-noise-removal') return ntJson(res, 200, await ntGetNoiseRemoval());
         if (req.method === 'POST' && url.pathname === '/noisetoggle/v1/microphone-noise-removal') {
           const body = await ntReadBody(req);
           if (typeof body.enabled !== 'boolean') return ntJson(res, 400, { ok:false, error:'enabled-must-be-boolean' });

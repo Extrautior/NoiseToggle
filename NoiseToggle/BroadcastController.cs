@@ -34,34 +34,30 @@ internal sealed class BroadcastController
         await SetNoiseRemovalWithUiAsync(enabled, cancellationToken);
     }
 
+    public async Task<bool?> GetNoiseRemovalStateAsync(CancellationToken cancellationToken)
+    {
+        var bridgeState = await _bridge.TryGetNoiseRemovalStateAsync(cancellationToken);
+        if (bridgeState is not null)
+        {
+            return bridgeState;
+        }
+
+        return ReadPersistedState();
+    }
+
     private Task SetNoiseRemovalWithUiAsync(bool enabled, CancellationToken cancellationToken)
     {
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var savedDesiredState = SaveDesiredState(enabled);
+            SaveDesiredState(enabled);
 
             using var automation = new UIA3Automation();
-            BroadcastWindowResult? windowResult;
-            try
-            {
-                windowResult = GetOrStartBroadcastWindow(automation, cancellationToken);
-            }
-            catch (OperationCanceledException) when (savedDesiredState)
-            {
-                AppLog.Info("Timed out waiting for NVIDIA Broadcast window after saving the desired config state.");
-                return;
-            }
+            var windowResult = GetOrStartBroadcastWindow(automation, cancellationToken);
 
             if (windowResult is null)
             {
-                if (savedDesiredState)
-                {
-                    AppLog.Info("NVIDIA Broadcast window could not be opened after saving the desired config state.");
-                    return;
-                }
-
-                throw new InvalidOperationException("NVIDIA Broadcast window could not be opened. The desired Broadcast setting was saved, but it may not apply until Broadcast reloads.");
+                throw new InvalidOperationException("NVIDIA Broadcast window could not be opened. The desired config value was saved, but the live Broadcast effect could not be verified.");
             }
 
             var window = windowResult.Window;
@@ -76,13 +72,7 @@ internal sealed class BroadcastController
                 var toggle = FindNoiseToggle(window);
                 if (toggle is null)
                 {
-                    if (savedDesiredState)
-                    {
-                        AppLog.Info("NVIDIA Broadcast microphone control was not visible after saving the desired config state.");
-                        return;
-                    }
-
-                    throw new InvalidOperationException("Could not find the NVIDIA Broadcast microphone noise-removal control. The desired Broadcast setting was saved, but the visible app control could not be toggled.");
+                    throw new InvalidOperationException("Could not find the NVIDIA Broadcast microphone noise-removal control. The desired config value was saved, but the live Broadcast effect could not be verified.");
                 }
 
                 ToggleElementToState(toggle, enabled);
@@ -96,6 +86,26 @@ internal sealed class BroadcastController
                 }
             }
         }, cancellationToken);
+    }
+
+    private static bool? ReadPersistedState()
+    {
+        if (!File.Exists(BroadcastSettingsPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var json = JsonNode.Parse(File.ReadAllText(BroadcastSettingsPath))?.AsObject();
+            var enabled = json?["AppStorage"]?["MaxineEffects"]?["MicrophoneEffects"]?["microphoneNoiseRemoval"]?["enabled"];
+            return enabled?.GetValue<bool>();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Could not read NVIDIA Broadcast settings file.", ex);
+            return null;
+        }
     }
 
     private static bool SaveDesiredState(bool enabled)
@@ -169,7 +179,7 @@ internal sealed class BroadcastController
             invokePattern.Invoke();
             Thread.Sleep(600);
             togglePattern = toggle.Patterns.Toggle.PatternOrDefault;
-            if (togglePattern is null || (togglePattern.ToggleState.ValueOrDefault == ToggleState.On) == enabled)
+            if (togglePattern is not null && (togglePattern.ToggleState.ValueOrDefault == ToggleState.On) == enabled)
             {
                 return;
             }
@@ -179,7 +189,12 @@ internal sealed class BroadcastController
         Thread.Sleep(600);
 
         togglePattern = toggle.Patterns.Toggle.PatternOrDefault;
-        if (togglePattern is not null && (togglePattern.ToggleState.ValueOrDefault == ToggleState.On) != enabled)
+        if (togglePattern is null)
+        {
+            throw new InvalidOperationException("Found the NVIDIA Broadcast noise-removal control, but Windows UI Automation could not verify its live state.");
+        }
+
+        if ((togglePattern.ToggleState.ValueOrDefault == ToggleState.On) != enabled)
         {
             throw new InvalidOperationException("Found the NVIDIA Broadcast noise-removal control, but Windows UI Automation could not change its state.");
         }

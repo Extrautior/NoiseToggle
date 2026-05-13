@@ -43,28 +43,66 @@ internal sealed class BroadcastBridgeClient
             return false;
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, BridgeUri("microphone-noise-removal"))
+        for (var attempt = 1; attempt <= 2; attempt++)
         {
-            Content = JsonContent.Create(new { enabled })
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.BridgeToken);
+            using var request = new HttpRequestMessage(HttpMethod.Post, BridgeUri("microphone-noise-removal"))
+            {
+                Content = JsonContent.Create(new { enabled })
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.BridgeToken);
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            AppLog.Info($"NVIDIA Broadcast private bridge returned HTTP {(int)response.StatusCode}; falling back to UI automation.");
-            return false;
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                AppLog.Info($"NVIDIA Broadcast private bridge returned HTTP {(int)response.StatusCode}; falling back to UI automation.");
+                return false;
+            }
+
+            var body = await response.Content.ReadFromJsonAsync<BroadcastBridgeResponse>(cancellationToken: cancellationToken);
+            if (body?.Ok == true && body.Enabled == enabled)
+            {
+                AppLog.Info($"NVIDIA Broadcast private bridge set microphone noise removal to {(enabled ? "on" : "off")}.");
+                return true;
+            }
+
+            var verified = await TryGetNoiseRemovalStateAsync(cancellationToken);
+            if (verified == enabled)
+            {
+                AppLog.Info($"NVIDIA Broadcast private bridge verified microphone noise removal is {(enabled ? "on" : "off")}.");
+                return true;
+            }
+
+            AppLog.Info($"NVIDIA Broadcast private bridge did not verify requested state on attempt {attempt} ({body?.Error ?? "state mismatch"}).");
         }
 
-        var body = await response.Content.ReadFromJsonAsync<BroadcastBridgeResponse>(cancellationToken: cancellationToken);
-        if (body?.Ok == true)
-        {
-            AppLog.Info($"NVIDIA Broadcast private bridge set microphone noise removal to {(enabled ? "on" : "off")}.");
-            return true;
-        }
-
-        AppLog.Info($"NVIDIA Broadcast private bridge did not confirm success ({body?.Error ?? "unknown error"}); falling back to UI automation.");
         return false;
+    }
+
+    public async Task<bool?> TryGetNoiseRemovalStateAsync(CancellationToken cancellationToken)
+    {
+        if (!await IsBridgeReadyAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, BridgeUri("microphone-noise-removal"));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.BridgeToken);
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var body = await response.Content.ReadFromJsonAsync<BroadcastBridgeResponse>(cancellationToken: cancellationToken);
+            return body?.Ok == true ? body.Enabled : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<bool> IsBridgeReadyAsync(CancellationToken cancellationToken)
@@ -108,5 +146,5 @@ internal sealed class BroadcastBridgeClient
         return new Uri($"http://127.0.0.1:{_settings.BroadcastBridgePort}/noisetoggle/v1/{route}");
     }
 
-    private sealed record BroadcastBridgeResponse(bool Ok, string? Error);
+    private sealed record BroadcastBridgeResponse(bool Ok, bool? Enabled, string? Source, string? Error);
 }
