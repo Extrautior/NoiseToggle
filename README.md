@@ -32,6 +32,8 @@ Discord control requires BetterDiscord or Vencord patch support. If Discord or V
 Install Discord/Vencord bridge
 ```
 
+If you use Vencord, [VencordAutoRepair](https://github.com/Extrautior/VencordAutoRepair) can also keep the NoiseToggle Vencord bridge repaired automatically after Discord/Vencord reinstalls or updates.
+
 NVIDIA Broadcast direct control requires patching the local NVIDIA Broadcast app. Use:
 
 ```text
