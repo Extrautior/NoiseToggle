@@ -12,7 +12,7 @@ internal sealed class BroadcastBridgeClient
     private readonly AppSettings _settings;
     private readonly HttpClient _httpClient = new()
     {
-        Timeout = TimeSpan.FromSeconds(3)
+        Timeout = TimeSpan.FromSeconds(8)
     };
 
     public BroadcastBridgeClient(AppSettings settings)

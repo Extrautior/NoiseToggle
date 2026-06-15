@@ -43,6 +43,20 @@ internal sealed class DiscordBridgeClient
             request.Content = new StringContent(JsonSerializer.Serialize(new { enabled }), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, cancellationToken);
             await EnsureSuccessAsync(response, cancellationToken);
+
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                var actual = await GetKrispStateAsync(cancellationToken);
+                if (actual == enabled)
+                {
+                    return;
+                }
+
+                await Task.Delay(100, cancellationToken);
+            }
+
+            throw new InvalidOperationException(
+                $"Discord bridge accepted the request, but live Krisp state did not change to {(enabled ? "enabled" : "disabled")}.");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {

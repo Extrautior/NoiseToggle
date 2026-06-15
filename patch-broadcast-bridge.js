@@ -1,229 +1,430 @@
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 
 const root = process.env.NOISETOGGLE_BROADCAST_APP_DIR
-  ? path.resolve(process.env.NOISETOGGLE_BROADCAST_APP_DIR)
-  : fs.existsSync(path.resolve('app'))
-    ? path.resolve('app')
-    : path.resolve('broadcast_patch/app');
-const mainPath = path.join(root, 'build/electron/main.js');
-let main = fs.readFileSync(mainPath, 'utf8');
-const marker = '/* NoiseToggle Broadcast Bridge v5 */';
-if (main.includes(marker)) {
-  console.log('Bridge already present');
-  process.exit(0);
+    ? path.resolve(process.env.NOISETOGGLE_BROADCAST_APP_DIR)
+    : fs.existsSync(path.resolve("app"))
+        ? path.resolve("app")
+        : path.resolve("broadcast_patch/app");
+const mainPath = path.join(root, "build/electron/main.js");
+const beginMarker = "/* NoiseToggle Broadcast Bridge BEGIN */";
+const endMarker = "/* NoiseToggle Broadcast Bridge END */";
+const legacyMarkers = [
+    "/* NoiseToggle Broadcast Bridge v4 */",
+    "/* NoiseToggle Broadcast Bridge v5 */"
+];
+
+function removeBridgeBlocks(source) {
+    let result = source;
+
+    while (result.includes(beginMarker)) {
+        const begin = result.indexOf(beginMarker);
+        const end = result.indexOf(endMarker, begin + beginMarker.length);
+        result = end >= 0
+            ? result.slice(0, begin) + result.slice(end + endMarker.length)
+            : result.slice(0, begin);
+    }
+
+    for (const marker of legacyMarkers) {
+        const index = result.indexOf(marker);
+        if (index >= 0) {
+            result = result.slice(0, index);
+        }
+    }
+
+    return result.trimEnd();
 }
 
-for (const oldMarker of ['/* NoiseToggle Broadcast Bridge v4 */', '/* NoiseToggle Broadcast Bridge v5 */']) {
-  const markerIndex = main.indexOf(oldMarker);
-  if (markerIndex >= 0) {
-    main = main.slice(0, markerIndex).replace(/;\s*$/, '');
-  }
-}
+let main = removeBridgeBlocks(fs.readFileSync(mainPath, "utf8"));
+const bridge = String.raw`
+;/* NoiseToggle Broadcast Bridge BEGIN */
+(function () {
+    "use strict";
 
-const bridge = `
-;${marker}
-(function(){
-  try {
-    const ntHttp = require('http');
-    const ntPath = require('path');
-    const ntFs = require('fs');
-    const ntPort = 28474;
-    const ntSettingsPath = ntPath.join(process.env.APPDATA || '', 'NoiseToggle', 'settings.json');
-    function ntJson(res, status, body) {
-      const text = JSON.stringify(body);
-      res.writeHead(status, {'Content-Type':'application/json','Content-Length':Buffer.byteLength(text)});
-      res.end(text);
-    }
-    function ntToken() {
-      try { return JSON.parse(ntFs.readFileSync(ntSettingsPath, 'utf8')).BridgeToken || ''; }
-      catch (_) { return ''; }
-    }
-    function ntAuthorized(req) {
-      const remote = (req.socket && req.socket.remoteAddress) || '';
-      if (!(remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1')) return false;
-      const expected = ntToken();
-      return expected && req.headers.authorization === 'Bearer ' + expected;
-    }
-    function ntReadBody(req) {
-      return new Promise((resolve, reject) => {
-        let data = '';
-        req.on('data', chunk => {
-          data += chunk;
-          if (data.length > 1024 * 1024) reject(new Error('request-too-large'));
-        });
-        req.on('end', () => {
-          try { resolve(data ? JSON.parse(data) : {}); }
-          catch (_) { reject(new Error('invalid-json')); }
-        });
-        req.on('error', reject);
-      });
-    }
-    function ntReadPersistedState() {
-      try {
-        const appSettings = ntPath.join(process.env.APPDATA || '', 'nvidia-broadcast', 'AppSetting.json');
-        const json = JSON.parse(ntFs.readFileSync(appSettings, 'utf8'));
-        const enabled = json && json.AppStorage && json.AppStorage.MaxineEffects && json.AppStorage.MaxineEffects.MicrophoneEffects && json.AppStorage.MaxineEffects.MicrophoneEffects.microphoneNoiseRemoval && json.AppStorage.MaxineEffects.MicrophoneEffects.microphoneNoiseRemoval.enabled;
-        return typeof enabled === 'boolean' ? enabled : null;
-      } catch (_) {
-        return null;
-      }
-    }
-    async function ntRendererState() {
-      if (!mainWin || mainWin.isDestroyed()) return { ok:false, error:'main-window-not-ready' };
-      const script = [
-        '(async function(){',
-        'function text(el){ return ((el && el.textContent) || \"\").replace(/\\\\s+/g, \" \").trim(); }',
-        'function state(el){',
-        '  if (!el) return null;',
-        '  if (typeof el.checked === \"boolean\") return el.checked;',
-        '  const aria = el.getAttribute && el.getAttribute(\"aria-checked\");',
-        '  if (aria === \"true\") return true;',
-        '  if (aria === \"false\") return false;',
-        '  const cls = String(el.className || \"\").toLowerCase();',
-        '  if (/(checked|enabled|active|on)/.test(cls) && !/(unchecked|disabled|off)/.test(cls)) return true;',
-        '  if (/(unchecked|disabled|off)/.test(cls)) return false;',
-        '  return null;',
-        '}',
-        'function controlsNear(label){',
-        '  const out = [];',
-        '  let node = label;',
-        '  for (let i = 0; node && i < 8; i++, node = node.parentElement) out.push(...node.querySelectorAll(\"input[type=checkbox], [role=switch], [aria-checked], button\"));',
-        '  return [...new Set(out)];',
-        '}',
-        'let labels = [...document.querySelectorAll(\"body *\")].filter(el => /noise removal/i.test(text(el))).sort((a,b) => text(a).length - text(b).length);',
-        'let controls = [];',
-        'for (const label of labels) controls.push(...controlsNear(label));',
-        'controls = [...new Set(controls)].filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });',
-        'let target = controls.find(el => state(el) !== null) || controls[0];',
-        'if (!target) return { ok:false, error:\"toggle-not-found\", labels: labels.length, controls: controls.length };',
-        'const enabled = state(target);',
-        'return { ok: typeof enabled === \"boolean\", enabled, tag: target.tagName, role: target.getAttribute(\"role\"), labels: labels.length, controls: controls.length };',
-        '})()'
-      ].join('\\n');
-      return await mainWin.webContents.executeJavaScript(script, true);
-    }
-    async function ntRendererToggle(enabled) {
-      if (!mainWin || mainWin.isDestroyed()) return { ok:false, error:'main-window-not-ready' };
-      const script = [
-        '(async function(){',
-        'const desired = ' + (enabled ? 'true' : 'false') + ';',
-        'const wait = ms => new Promise(r => setTimeout(r, ms));',
-        'function text(el){ return ((el && el.textContent) || \"\").replace(/\\\\s+/g, \" \").trim(); }',
-        'function state(el){',
-        '  if (!el) return null;',
-        '  if (typeof el.checked === \"boolean\") return el.checked;',
-        '  const aria = el.getAttribute && el.getAttribute(\"aria-checked\");',
-        '  if (aria === \"true\") return true;',
-        '  if (aria === \"false\") return false;',
-        '  const cls = String(el.className || \"\").toLowerCase();',
-        '  if (/(checked|enabled|active|on)/.test(cls) && !/(unchecked|disabled|off)/.test(cls)) return true;',
-        '  if (/(unchecked|disabled|off)/.test(cls)) return false;',
-        '  return null;',
-        '}',
-        'function controlsNear(label){',
-        '  const out = [];',
-        '  let node = label;',
-        '  for (let i = 0; node && i < 8; i++, node = node.parentElement) out.push(...node.querySelectorAll(\"input[type=checkbox], [role=switch], [aria-checked], button\"));',
-        '  return [...new Set(out)];',
-        '}',
-        'if (!/noise removal/i.test(document.body && document.body.innerText || \"\") && location.hash) { location.hash = \"\"; await wait(1200); }',
-        'let labels = [...document.querySelectorAll(\"body *\")].filter(el => /noise removal/i.test(text(el))).sort((a,b) => text(a).length - text(b).length);',
-        'let controls = [];',
-        'for (const label of labels) controls.push(...controlsNear(label));',
-        'controls = [...new Set(controls)].filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });',
-        'let target = controls.find(el => state(el) !== null) || controls[0];',
-        'if (!target) return { ok:false, error:\"toggle-not-found\", labels: labels.length };',
-        'const before = state(target);',
-        'if (before !== desired) target.click();',
-        'let after = state(target);',
-        'for (let i = 0; i < 12 && after !== desired; i++) { await wait(250); after = state(target); }',
-        'return { ok: after === desired, enabled: after, before, after, tag: target.tagName, role: target.getAttribute(\"role\"), labels: labels.length, controls: controls.length };',
-        '})()'
-      ].join('\\n');
-      return await mainWin.webContents.executeJavaScript(script, true);
-    }
-    async function ntGetNoiseRemoval() {
-      try {
-        const renderer = await ntRendererState();
-        if (renderer && renderer.ok && typeof renderer.enabled === 'boolean') return { ok:true, enabled: renderer.enabled, source:'renderer', renderer };
-      } catch (e) {
-        try { log && log.warn && log.warn('NoiseToggle bridge live read failed', e); } catch (_) {}
-      }
-      const persisted = ntReadPersistedState();
-      if (typeof persisted === 'boolean') return { ok:true, enabled: persisted, source:'persisted' };
-      return { ok:false, enabled:null, source:'unknown', error:'state-unavailable' };
-    }
-    async function ntSetNoiseRemoval(enabled) {
-      try {
-        persistenceStorage && persistenceStorage.AddInfo(['AppStorage','MaxineEffects','MicrophoneEffects','microphoneNoiseRemoval','enabled'], enabled);
-      } catch (e) {
-        log && log.warn && log.warn('NoiseToggle bridge persistence update failed', e);
-      }
-      let renderer = await ntRendererToggle(enabled);
-      if (renderer && renderer.ok && renderer.enabled === enabled) return { ok:true, enabled, source:'renderer', renderer };
-      let verified = await ntGetNoiseRemoval();
-      return { ok: !!(verified && verified.ok && verified.enabled === enabled), enabled: verified.enabled, source: verified.source, renderer, verified };
-    }
-    async function ntDebug() {
-      const data = {
-        ok: true,
-        version: 5,
-        hasMainWindow: !!(mainWin && !mainWin.isDestroyed()),
-        mainWindowUrl: mainWin && !mainWin.isDestroyed() ? mainWin.webContents.getURL() : null,
-        backendKeys: [],
-        renderer: null,
-        effectsGroupsData: null
-      };
-      try { data.backendKeys = Object.keys(backend_comm || {}).sort(); } catch (e) { data.backendKeysError = String(e && e.message || e); }
-      try {
-        if (backend_comm && backend_comm.getEffectsGroupsData) data.effectsGroupsData = backend_comm.getEffectsGroupsData();
-      } catch (e) {
-        data.effectsGroupsError = String(e && e.message || e);
-      }
-      try {
-        if (mainWin && !mainWin.isDestroyed()) {
-          data.renderer = await mainWin.webContents.executeJavaScript([
-            '({',
-            'url: location.href,',
-            'hash: location.hash,',
-            'title: document.title,',
-            'readyState: document.readyState,',
-            'bodyText: (document.body && document.body.innerText || \"\").slice(0, 2000),',
-            'bodyHtml: (document.body && document.body.innerHTML || \"\").slice(0, 2000)',
-            '})'
-          ].join('\\n'), true);
+    const ntBridgeVersion = 6;
+    try {
+        const ntCrypto = require("crypto");
+        const ntElectron = require("electron");
+        const ntFs = require("fs");
+        const ntHttp = require("http");
+        const ntPath = require("path");
+        const ntSettingsPath = ntPath.join(process.env.APPDATA || "", "NoiseToggle", "settings.json");
+
+        function ntLog(level, message, error) {
+            try {
+                const target = log && typeof log[level] === "function" ? log : console;
+                target[level](message, error || "");
+            } catch (_) {}
         }
-      } catch (e) {
-        data.rendererError = String(e && e.message || e);
-      }
-      return data;
-    }
-    const ntServer = ntHttp.createServer(async (req, res) => {
-      try {
-        if (!ntAuthorized(req)) return ntJson(res, 401, { ok:false, error:'unauthorized' });
-        const url = new URL(req.url, 'http://127.0.0.1:' + ntPort);
-        if (req.method === 'GET' && url.pathname === '/noisetoggle/v1/health') return ntJson(res, 200, { ok:true });
-        if (req.method === 'GET' && url.pathname === '/noisetoggle/v1/debug') return ntJson(res, 200, await ntDebug());
-        if (req.method === 'GET' && url.pathname === '/noisetoggle/v1/microphone-noise-removal') return ntJson(res, 200, await ntGetNoiseRemoval());
-        if (req.method === 'POST' && url.pathname === '/noisetoggle/v1/microphone-noise-removal') {
-          const body = await ntReadBody(req);
-          if (typeof body.enabled !== 'boolean') return ntJson(res, 400, { ok:false, error:'enabled-must-be-boolean' });
-          const result = await ntSetNoiseRemoval(body.enabled);
-          return ntJson(res, result.ok ? 200 : 500, result);
+
+        function ntSettings() {
+            try {
+                return JSON.parse(ntFs.readFileSync(ntSettingsPath, "utf8"));
+            } catch (_) {
+                return {};
+            }
         }
-        return ntJson(res, 404, { ok:false, error:'not-found' });
-      } catch (e) {
-        try { log && log.error && log.error('NoiseToggle bridge request failed', e); } catch (_) {}
-        return ntJson(res, 500, { ok:false, error:String(e && e.message || e) });
-      }
-    });
-    ntServer.on('error', e => { try { log && log.warn && log.warn('NoiseToggle bridge server error', e); } catch (_) {} });
-    ntServer.listen(ntPort, '127.0.0.1', () => { try { log && log.info && log.info('NoiseToggle bridge listening on 127.0.0.1:' + ntPort); } catch (_) {} });
-  } catch (e) {
-    try { log && log.error && log.error('NoiseToggle bridge failed to initialize', e); } catch (_) {}
-  }
+
+        function ntPort() {
+            const configured = Number(ntSettings().BroadcastBridgePort);
+            return Number.isInteger(configured) && configured > 0 && configured <= 65535 ? configured : 28474;
+        }
+
+        function ntJson(res, status, body) {
+            const text = JSON.stringify(body);
+            res.writeHead(status, {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(text),
+                "Cache-Control": "no-store"
+            });
+            res.end(text);
+        }
+
+        function ntLoopback(req) {
+            const remote = (req.socket && req.socket.remoteAddress) || "";
+            return remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+        }
+
+        function ntSameToken(actual, expected) {
+            if (!actual || !expected) return false;
+            const left = Buffer.from(actual);
+            const right = Buffer.from(expected);
+            return left.length === right.length && ntCrypto.timingSafeEqual(left, right);
+        }
+
+        function ntAuthorized(req) {
+            if (!ntLoopback(req)) return false;
+            const token = ntSettings().BridgeToken || "";
+            return ntSameToken(req.headers.authorization || "", "Bearer " + token);
+        }
+
+        function ntReadBody(req) {
+            return new Promise((resolve, reject) => {
+                let data = "";
+                let settled = false;
+                req.on("data", chunk => {
+                    if (settled) return;
+                    data += chunk;
+                    if (data.length > 64 * 1024) {
+                        settled = true;
+                        reject(new Error("request-too-large"));
+                        req.destroy();
+                    }
+                });
+                req.on("end", () => {
+                    if (settled) return;
+                    try {
+                        resolve(data ? JSON.parse(data) : {});
+                    } catch (_) {
+                        reject(new Error("invalid-json"));
+                    }
+                });
+                req.on("error", reject);
+            });
+        }
+
+        function ntReadPersistedState() {
+            try {
+                const appSettings = ntPath.join(process.env.APPDATA || "", "nvidia-broadcast", "AppSetting.json");
+                const json = JSON.parse(ntFs.readFileSync(appSettings, "utf8"));
+                const effect = json?.AppStorage?.MaxineEffects?.MicrophoneEffects?.microphoneNoiseRemoval;
+                return typeof effect?.enabled === "boolean" ? effect.enabled : null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function ntWindowReady() {
+            return !!(mainWin && !mainWin.isDestroyed() && !mainWin.webContents.isDestroyed());
+        }
+
+        function ntGatewayCall(channel, replyPrefix, payload, timeoutMs) {
+            return new Promise((resolve, reject) => {
+                if (!ntWindowReady()) {
+                    reject(new Error("main-window-not-ready"));
+                    return;
+                }
+
+                const replyChannel = replyPrefix + Date.now() + "-" + ntCrypto.randomBytes(4).toString("hex");
+                let finished = false;
+                const finish = (error, value) => {
+                    if (finished) return;
+                    finished = true;
+                    clearTimeout(timer);
+                    ntElectron.ipcMain.removeListener(replyChannel, onReply);
+                    error ? reject(error) : resolve(value);
+                };
+                const onReply = (_event, value) => finish(null, value);
+                const timer = setTimeout(
+                    () => finish(new Error(channel + "-timeout")),
+                    timeoutMs || 5000
+                );
+
+                ntElectron.ipcMain.once(replyChannel, onReply);
+                mainWin.webContents.send(channel, { ...payload, replyChannel });
+            });
+        }
+
+        function ntFindNoiseEffect(value, seen) {
+            if (!value || typeof value !== "object") return null;
+            seen = seen || new Set();
+            if (seen.has(value)) return null;
+            seen.add(value);
+
+            if (value.effectId === "microphoneNoiseRemoval" && typeof value.enabled === "boolean") {
+                return { enabled: value.enabled, effect: value };
+            }
+
+            if (Object.prototype.hasOwnProperty.call(value, "microphoneNoiseRemoval")) {
+                const effect = value.microphoneNoiseRemoval;
+                if (typeof effect === "boolean") return { enabled: effect, effect: value };
+                if (effect && typeof effect.enabled === "boolean") return { enabled: effect.enabled, effect };
+            }
+
+            for (const child of Object.values(value)) {
+                const found = ntFindNoiseEffect(child, seen);
+                if (found) return found;
+            }
+            return null;
+        }
+
+        async function ntGatewayState() {
+            const raw = await ntGatewayCall(
+                "gateway-get-enabled-effects",
+                "gateway-get-effects-result-",
+                { effectType: "microphone" },
+                5000
+            );
+            const found = ntFindNoiseEffect(raw);
+            return found
+                ? { ok: true, enabled: found.enabled, source: "nvidia-gateway", raw, effect: found.effect }
+                : { ok: false, enabled: null, source: "nvidia-gateway", error: "effect-not-found", raw };
+        }
+
+        async function ntGatewaySet(enabled, current) {
+            const value = current?.effect && Object.prototype.hasOwnProperty.call(current.effect, "value")
+                ? current.effect.value
+                : undefined;
+            return await ntGatewayCall(
+                "gateway-enable-effect",
+                "gateway-enable-effect-result-",
+                { effectId: "microphoneNoiseRemoval", enabled, value },
+                10000
+            );
+        }
+
+        async function ntRendererState() {
+            if (!ntWindowReady()) return { ok: false, enabled: null, source: "renderer", error: "main-window-not-ready" };
+            const script = [
+                "(() => {",
+                "  const state = el => {",
+                "    if (!el) return null;",
+                "    if (typeof el.checked === 'boolean') return el.checked;",
+                "    const aria = el.getAttribute?.('aria-checked');",
+                "    if (aria === 'true') return true;",
+                "    if (aria === 'false') return false;",
+                "    return null;",
+                "  };",
+                "  const direct = document.querySelector('#microphoneNoiseRemoval, [data-testid=\"microphoneNoiseRemoval\"], [data-effect-id=\"microphoneNoiseRemoval\"]');",
+                "  if (direct && state(direct) !== null) return { ok: true, enabled: state(direct), source: 'renderer-control' };",
+                "  const candidates = [...document.querySelectorAll('input[type=checkbox], [role=switch], [aria-checked]')];",
+                "  const target = candidates.find(el => /microphone.*noise|noise.*removal/i.test([el.id, el.getAttribute?.('data-testid'), el.getAttribute?.('aria-label')].filter(Boolean).join(' ')));",
+                "  return target && state(target) !== null",
+                "    ? { ok: true, enabled: state(target), source: 'renderer-control' }",
+                "    : { ok: false, enabled: null, source: 'renderer-control', error: 'control-not-found' };",
+                "})()"
+            ].join("\n");
+            return await mainWin.webContents.executeJavaScript(script, true);
+        }
+
+        async function ntRendererSet(enabled) {
+            if (!ntWindowReady()) return { ok: false, enabled: null, source: "renderer-control", error: "main-window-not-ready" };
+            const script = [
+                "(async () => {",
+                "  const desired = " + (enabled ? "true" : "false") + ";",
+                "  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));",
+                "  const state = el => {",
+                "    if (!el) return null;",
+                "    if (typeof el.checked === 'boolean') return el.checked;",
+                "    const aria = el.getAttribute?.('aria-checked');",
+                "    if (aria === 'true') return true;",
+                "    if (aria === 'false') return false;",
+                "    return null;",
+                "  };",
+                "  const candidates = [...document.querySelectorAll('#microphoneNoiseRemoval, [data-testid=\"microphoneNoiseRemoval\"], [data-effect-id=\"microphoneNoiseRemoval\"], input[type=checkbox], [role=switch], [aria-checked]')];",
+                "  const target = candidates.find(el => {",
+                "    const identity = [el.id, el.getAttribute?.('data-testid'), el.getAttribute?.('data-effect-id'), el.getAttribute?.('aria-label')].filter(Boolean).join(' ');",
+                "    return /microphoneNoiseRemoval|microphone.*noise|noise.*removal/i.test(identity) && state(el) !== null;",
+                "  });",
+                "  if (!target) return { ok: false, enabled: null, source: 'renderer-control', error: 'control-not-found' };",
+                "  const before = state(target);",
+                "  if (before !== desired) target.click();",
+                "  for (let i = 0; i < 30; i++) {",
+                "    await wait(100);",
+                "    const after = state(target);",
+                "    if (after === desired) return { ok: true, enabled: after, source: 'renderer-control', before };",
+                "  }",
+                "  return { ok: false, enabled: state(target), source: 'renderer-control', before, error: 'live-state-mismatch' };",
+                "})()"
+            ].join("\n");
+            return await mainWin.webContents.executeJavaScript(script, true);
+        }
+
+        async function ntGetNoiseRemovalOnce() {
+            const errors = [];
+            try {
+                const gateway = await ntGatewayState();
+                if (gateway.ok) return gateway;
+                errors.push(gateway.error || "gateway-state-unavailable");
+            } catch (error) {
+                errors.push(String(error?.message || error));
+            }
+
+            try {
+                const renderer = await ntRendererState();
+                if (renderer?.ok && typeof renderer.enabled === "boolean") return renderer;
+                errors.push(renderer?.error || "renderer-state-unavailable");
+            } catch (error) {
+                errors.push(String(error?.message || error));
+            }
+
+            return {
+                ok: false,
+                enabled: null,
+                source: "unavailable",
+                persistedEnabled: ntReadPersistedState(),
+                error: errors.join("; ") || "live-state-unavailable"
+            };
+        }
+
+        async function ntGetNoiseRemoval() {
+            let state = null;
+            for (let attempt = 0; attempt < 20; attempt++) {
+                state = await ntGetNoiseRemovalOnce();
+                if (state.ok) return state;
+                await new Promise(resolve => setTimeout(resolve, 150));
+            }
+            return state || {
+                ok: false,
+                enabled: null,
+                source: "unavailable",
+                persistedEnabled: ntReadPersistedState(),
+                error: "live-state-unavailable"
+            };
+        }
+
+        async function ntVerifyNoiseRemoval(enabled) {
+            for (let attempt = 0; attempt < 20; attempt++) {
+                const state = await ntGetNoiseRemovalOnce();
+                if (state.ok && state.enabled === enabled) return state;
+                await new Promise(resolve => setTimeout(resolve, 150));
+            }
+            return await ntGetNoiseRemovalOnce();
+        }
+
+        async function ntSetNoiseRemoval(enabled) {
+            const errors = [];
+            let gatewayReply = null;
+            let current = null;
+
+            try {
+                current = await ntGetNoiseRemoval();
+                if (!current.ok) throw new Error(current.error || "live-state-unavailable");
+                gatewayReply = await ntGatewaySet(enabled, current);
+                const verified = await ntVerifyNoiseRemoval(enabled);
+                if (verified.ok && verified.enabled === enabled) {
+                    return { ok: true, enabled, source: "nvidia-gateway", gatewayReply, verified };
+                }
+                errors.push("gateway-live-state-mismatch");
+            } catch (error) {
+                errors.push(String(error?.message || error));
+            }
+
+            try {
+                const renderer = await ntRendererSet(enabled);
+                const verified = await ntVerifyNoiseRemoval(enabled);
+                if (renderer?.ok && verified.ok && verified.enabled === enabled) {
+                    return { ok: true, enabled, source: "renderer-control", renderer, verified };
+                }
+                errors.push(renderer?.error || "renderer-live-state-mismatch");
+            } catch (error) {
+                errors.push(String(error?.message || error));
+            }
+
+            const finalState = await ntGetNoiseRemoval();
+            return {
+                ok: false,
+                enabled: finalState.enabled,
+                source: finalState.source,
+                persistedEnabled: ntReadPersistedState(),
+                error: errors.join("; ") || "live-effect-not-verified",
+                gatewayReply,
+                finalState
+            };
+        }
+
+        async function ntDebug() {
+            const state = await ntGetNoiseRemoval();
+            const data = {
+                ok: true,
+                bridgeVersion: ntBridgeVersion,
+                appVersion: require(ntPath.join(ntElectron.app.getAppPath(), "package.json")).version,
+                hasMainWindow: ntWindowReady(),
+                mainWindowUrl: ntWindowReady() ? mainWin.webContents.getURL() : null,
+                state,
+                persistedEnabled: ntReadPersistedState(),
+                backendKeys: []
+            };
+            try {
+                data.backendKeys = Object.keys(backend_comm || {}).sort();
+            } catch (error) {
+                data.backendKeysError = String(error?.message || error);
+            }
+            return data;
+        }
+
+        const ntServer = ntHttp.createServer(async (req, res) => {
+            try {
+                if (!ntAuthorized(req)) return ntJson(res, 401, { ok: false, error: "unauthorized" });
+                const url = new URL(req.url, "http://127.0.0.1:" + ntPort());
+
+                if (req.method === "GET" && url.pathname === "/noisetoggle/v1/health") {
+                    return ntJson(res, 200, { ok: true, bridgeVersion: ntBridgeVersion });
+                }
+                if (req.method === "GET" && url.pathname === "/noisetoggle/v1/debug") {
+                    return ntJson(res, 200, await ntDebug());
+                }
+                if (req.method === "GET" && url.pathname === "/noisetoggle/v1/microphone-noise-removal") {
+                    const result = await ntGetNoiseRemoval();
+                    return ntJson(res, result.ok ? 200 : 503, result);
+                }
+                if (req.method === "POST" && url.pathname === "/noisetoggle/v1/microphone-noise-removal") {
+                    const body = await ntReadBody(req);
+                    if (typeof body.enabled !== "boolean") {
+                        return ntJson(res, 400, { ok: false, error: "enabled-must-be-boolean" });
+                    }
+                    const result = await ntSetNoiseRemoval(body.enabled);
+                    return ntJson(res, result.ok ? 200 : 500, result);
+                }
+                return ntJson(res, 404, { ok: false, error: "not-found" });
+            } catch (error) {
+                ntLog("error", "NoiseToggle bridge request failed", error);
+                return ntJson(res, 500, { ok: false, error: String(error?.message || error) });
+            }
+        });
+
+        ntServer.on("error", error => ntLog("error", "NoiseToggle bridge server error", error));
+        ntServer.listen(ntPort(), "127.0.0.1", () => {
+            ntLog("info", "NoiseToggle Broadcast bridge v" + ntBridgeVersion + " listening on 127.0.0.1:" + ntPort());
+        });
+    } catch (error) {
+        try {
+            log?.error?.("NoiseToggle Broadcast bridge failed to initialize", error);
+        } catch (_) {}
+    }
 })();
+/* NoiseToggle Broadcast Bridge END */
 `;
-fs.writeFileSync(mainPath, main + bridge, 'utf8');
-console.log('Bridge appended to ' + mainPath);
+
+fs.writeFileSync(mainPath, main + "\n" + bridge.trim() + "\n", "utf8");
+console.log("Installed NoiseToggle Broadcast bridge v6 in " + mainPath);
