@@ -15,13 +15,18 @@ NoiseToggle is a lightweight Windows tray app for switching microphone noise sup
 
 ## Current compatibility
 
-NoiseToggle v0.1.5 was verified on June 15, 2026 with:
+NoiseToggle v0.1.6 was verified on June 15, 2026 with:
 
 - NVIDIA Broadcast `2.2.0.10298`
 - Discord Stable `1.0.9241`
 - Vencord patcher commit `e8415d7`
 
 The bridge protocols use an authenticated random token, bind only to `127.0.0.1`, and verify the live effect state after every change.
+
+The v0.1.6 Broadcast bridge sends NVIDIA's scalar effect strength instead of
+feeding the full settings object back into the gateway. It rejects malformed
+or zero-strength enabled states rather than treating a visual toggle as proof
+that native audio processing changed.
 
 ## Install
 

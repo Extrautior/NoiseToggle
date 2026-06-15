@@ -41,7 +41,7 @@ const bridge = String.raw`
 (function () {
     "use strict";
 
-    const ntBridgeVersion = 6;
+    const ntBridgeVersion = 7;
     try {
         const ntCrypto = require("crypto");
         const ntElectron = require("electron");
@@ -165,6 +165,27 @@ const bridge = String.raw`
             });
         }
 
+        function ntReadEffectStrength(effect) {
+            let value = effect?.value;
+            for (let depth = 0; depth < 32; depth++) {
+                if (typeof value === "number" && Number.isFinite(value)) return value;
+                if (!value || typeof value !== "object" || !Object.prototype.hasOwnProperty.call(value, "strength")) {
+                    return null;
+                }
+                value = value.strength;
+            }
+            return null;
+        }
+
+        function ntHasCanonicalStrength(effect) {
+            return !!(
+                effect?.value &&
+                typeof effect.value === "object" &&
+                typeof effect.value.strength === "number" &&
+                Number.isFinite(effect.value.strength)
+            );
+        }
+
         function ntFindNoiseEffect(value, seen) {
             if (!value || typeof value !== "object") return null;
             seen = seen || new Set();
@@ -172,13 +193,25 @@ const bridge = String.raw`
             seen.add(value);
 
             if (value.effectId === "microphoneNoiseRemoval" && typeof value.enabled === "boolean") {
-                return { enabled: value.enabled, effect: value };
+                return {
+                    enabled: value.enabled,
+                    strength: ntReadEffectStrength(value),
+                    canonical: ntHasCanonicalStrength(value),
+                    effect: value
+                };
             }
 
             if (Object.prototype.hasOwnProperty.call(value, "microphoneNoiseRemoval")) {
                 const effect = value.microphoneNoiseRemoval;
                 if (typeof effect === "boolean") return { enabled: effect, effect: value };
-                if (effect && typeof effect.enabled === "boolean") return { enabled: effect.enabled, effect };
+                if (effect && typeof effect.enabled === "boolean") {
+                    return {
+                        enabled: effect.enabled,
+                        strength: ntReadEffectStrength(effect),
+                        canonical: ntHasCanonicalStrength(effect),
+                        effect
+                    };
+                }
             }
 
             for (const child of Object.values(value)) {
@@ -196,15 +229,25 @@ const bridge = String.raw`
                 5000
             );
             const found = ntFindNoiseEffect(raw);
-            return found
-                ? { ok: true, enabled: found.enabled, source: "nvidia-gateway", raw, effect: found.effect }
+            return found && typeof found.strength === "number"
+                ? {
+                    ok: found.canonical,
+                    enabled: found.enabled,
+                    strength: found.strength,
+                    canonical: found.canonical,
+                    effective: !found.enabled || found.strength > 0,
+                    source: "nvidia-gateway",
+                    raw,
+                    effect: found.effect,
+                    error: found.canonical ? undefined : "invalid-effect-parameters"
+                }
                 : { ok: false, enabled: null, source: "nvidia-gateway", error: "effect-not-found", raw };
         }
 
         async function ntGatewaySet(enabled, current) {
-            const value = current?.effect && Object.prototype.hasOwnProperty.call(current.effect, "value")
-                ? current.effect.value
-                : undefined;
+            const value = typeof current?.strength === "number" && current.strength > 0
+                ? current.strength
+                : 1;
             return await ntGatewayCall(
                 "gateway-enable-effect",
                 "gateway-enable-effect-result-",
@@ -213,77 +256,12 @@ const bridge = String.raw`
             );
         }
 
-        async function ntRendererState() {
-            if (!ntWindowReady()) return { ok: false, enabled: null, source: "renderer", error: "main-window-not-ready" };
-            const script = [
-                "(() => {",
-                "  const state = el => {",
-                "    if (!el) return null;",
-                "    if (typeof el.checked === 'boolean') return el.checked;",
-                "    const aria = el.getAttribute?.('aria-checked');",
-                "    if (aria === 'true') return true;",
-                "    if (aria === 'false') return false;",
-                "    return null;",
-                "  };",
-                "  const direct = document.querySelector('#microphoneNoiseRemoval, [data-testid=\"microphoneNoiseRemoval\"], [data-effect-id=\"microphoneNoiseRemoval\"]');",
-                "  if (direct && state(direct) !== null) return { ok: true, enabled: state(direct), source: 'renderer-control' };",
-                "  const candidates = [...document.querySelectorAll('input[type=checkbox], [role=switch], [aria-checked]')];",
-                "  const target = candidates.find(el => /microphone.*noise|noise.*removal/i.test([el.id, el.getAttribute?.('data-testid'), el.getAttribute?.('aria-label')].filter(Boolean).join(' ')));",
-                "  return target && state(target) !== null",
-                "    ? { ok: true, enabled: state(target), source: 'renderer-control' }",
-                "    : { ok: false, enabled: null, source: 'renderer-control', error: 'control-not-found' };",
-                "})()"
-            ].join("\n");
-            return await mainWin.webContents.executeJavaScript(script, true);
-        }
-
-        async function ntRendererSet(enabled) {
-            if (!ntWindowReady()) return { ok: false, enabled: null, source: "renderer-control", error: "main-window-not-ready" };
-            const script = [
-                "(async () => {",
-                "  const desired = " + (enabled ? "true" : "false") + ";",
-                "  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));",
-                "  const state = el => {",
-                "    if (!el) return null;",
-                "    if (typeof el.checked === 'boolean') return el.checked;",
-                "    const aria = el.getAttribute?.('aria-checked');",
-                "    if (aria === 'true') return true;",
-                "    if (aria === 'false') return false;",
-                "    return null;",
-                "  };",
-                "  const candidates = [...document.querySelectorAll('#microphoneNoiseRemoval, [data-testid=\"microphoneNoiseRemoval\"], [data-effect-id=\"microphoneNoiseRemoval\"], input[type=checkbox], [role=switch], [aria-checked]')];",
-                "  const target = candidates.find(el => {",
-                "    const identity = [el.id, el.getAttribute?.('data-testid'), el.getAttribute?.('data-effect-id'), el.getAttribute?.('aria-label')].filter(Boolean).join(' ');",
-                "    return /microphoneNoiseRemoval|microphone.*noise|noise.*removal/i.test(identity) && state(el) !== null;",
-                "  });",
-                "  if (!target) return { ok: false, enabled: null, source: 'renderer-control', error: 'control-not-found' };",
-                "  const before = state(target);",
-                "  if (before !== desired) target.click();",
-                "  for (let i = 0; i < 30; i++) {",
-                "    await wait(100);",
-                "    const after = state(target);",
-                "    if (after === desired) return { ok: true, enabled: after, source: 'renderer-control', before };",
-                "  }",
-                "  return { ok: false, enabled: state(target), source: 'renderer-control', before, error: 'live-state-mismatch' };",
-                "})()"
-            ].join("\n");
-            return await mainWin.webContents.executeJavaScript(script, true);
-        }
-
         async function ntGetNoiseRemovalOnce() {
             const errors = [];
             try {
                 const gateway = await ntGatewayState();
                 if (gateway.ok) return gateway;
                 errors.push(gateway.error || "gateway-state-unavailable");
-            } catch (error) {
-                errors.push(String(error?.message || error));
-            }
-
-            try {
-                const renderer = await ntRendererState();
-                if (renderer?.ok && typeof renderer.enabled === "boolean") return renderer;
-                errors.push(renderer?.error || "renderer-state-unavailable");
             } catch (error) {
                 errors.push(String(error?.message || error));
             }
@@ -328,25 +306,26 @@ const bridge = String.raw`
             let current = null;
 
             try {
-                current = await ntGetNoiseRemoval();
-                if (!current.ok) throw new Error(current.error || "live-state-unavailable");
+                current = await ntGatewayState();
+                if (typeof current.strength !== "number") {
+                    throw new Error(current.error || "live-state-unavailable");
+                }
                 gatewayReply = await ntGatewaySet(enabled, current);
                 const verified = await ntVerifyNoiseRemoval(enabled);
-                if (verified.ok && verified.enabled === enabled) {
+                if (
+                    gatewayReply?.success === true &&
+                    verified.ok &&
+                    verified.canonical === true &&
+                    verified.enabled === enabled &&
+                    (!enabled || verified.strength > 0)
+                ) {
                     return { ok: true, enabled, source: "nvidia-gateway", gatewayReply, verified };
                 }
-                errors.push("gateway-live-state-mismatch");
-            } catch (error) {
-                errors.push(String(error?.message || error));
-            }
-
-            try {
-                const renderer = await ntRendererSet(enabled);
-                const verified = await ntVerifyNoiseRemoval(enabled);
-                if (renderer?.ok && verified.ok && verified.enabled === enabled) {
-                    return { ok: true, enabled, source: "renderer-control", renderer, verified };
-                }
-                errors.push(renderer?.error || "renderer-live-state-mismatch");
+                errors.push(
+                    enabled && verified?.strength === 0
+                        ? "effect-strength-is-zero"
+                        : "gateway-live-state-mismatch"
+                );
             } catch (error) {
                 errors.push(String(error?.message || error));
             }
@@ -427,4 +406,4 @@ const bridge = String.raw`
 `;
 
 fs.writeFileSync(mainPath, main + "\n" + bridge.trim() + "\n", "utf8");
-console.log("Installed NoiseToggle Broadcast bridge v6 in " + mainPath);
+console.log("Installed NoiseToggle Broadcast bridge v7 in " + mainPath);
