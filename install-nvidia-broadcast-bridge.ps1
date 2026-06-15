@@ -75,6 +75,7 @@ function Start-BroadcastHiddenDetached {
         return
     }
 
+    Remove-Item Env:\__COMPAT_LAYER -ErrorAction SilentlyContinue
     $shell = New-Object -ComObject Shell.Application
     try {
         $shell.ShellExecute($broadcastExe, "--launch-hidden", $broadcastDir, "open", 0)
@@ -174,7 +175,7 @@ try {
     Copy-Item -LiteralPath $patchedAsar -Destination $targetAsar -Force
 
     Start-BroadcastHiddenDetached
-    Write-Host "NoiseToggle NVIDIA Broadcast bridge v6 installed for NVIDIA Broadcast $version."
+    Write-Host "NoiseToggle NVIDIA Broadcast bridge v7 installed for NVIDIA Broadcast $version."
     Write-Host "Clean backup preserved at $cleanBackup"
 }
 finally {

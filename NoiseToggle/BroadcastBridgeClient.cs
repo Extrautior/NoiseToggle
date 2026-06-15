@@ -132,6 +132,7 @@ internal sealed class BroadcastBridgeClient
             Process.Start(new ProcessStartInfo(BroadcastExe)
             {
                 Arguments = "--launch-hidden",
+                WorkingDirectory = Path.GetDirectoryName(BroadcastExe),
                 UseShellExecute = true
             });
         }
