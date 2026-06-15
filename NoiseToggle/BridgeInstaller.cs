@@ -6,6 +6,7 @@ internal static class BridgeInstaller
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BetterDiscord", "plugins");
 
     public static string PluginPath => Path.Combine(PluginDirectory, "NoiseToggleBridge.plugin.js");
+
     public static string VencordPatcherPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Vencord", "dist", "patcher.js");
 
@@ -31,6 +32,19 @@ internal static class BridgeInstaller
             : $"Installed bridge for {string.Join(" and ", installed)}. Restart Discord.";
     }
 
+    public static bool IsVencordBridgeCurrent()
+    {
+        if (!File.Exists(VencordPatcherPath))
+        {
+            return false;
+        }
+
+        var existing = File.ReadAllText(VencordPatcherPath);
+        return CountOccurrences(existing, VencordBeginMarker) == 1 &&
+               CountOccurrences(existing, VencordEndMarker) == 1 &&
+               ExtractBridgeBlock(existing) == VencordPatchSource.Trim();
+    }
+
     private static bool InstallBetterDiscordPlugin()
     {
         if (!Directory.Exists(PluginDirectory))
@@ -50,312 +64,382 @@ internal static class BridgeInstaller
         }
 
         var existing = File.ReadAllText(VencordPatcherPath);
-        if (existing.Contains(VencordBeginMarker, StringComparison.Ordinal))
+        var clean = RemoveBridgeBlocks(existing).TrimEnd();
+        var updated = clean + Environment.NewLine + Environment.NewLine + VencordPatchSource.Trim() + Environment.NewLine;
+        if (updated == existing)
         {
-            var begin = existing.IndexOf(VencordBeginMarker, StringComparison.Ordinal);
-            var end = existing.IndexOf(VencordEndMarker, begin, StringComparison.Ordinal);
-            if (end >= 0)
-            {
-                end += VencordEndMarker.Length;
-                File.WriteAllText(VencordPatcherPath, existing[..begin] + VencordPatchSource + existing[end..]);
-            }
-
             return true;
         }
 
         var backupPath = VencordPatcherPath + ".noisetoggle.bak";
         if (!File.Exists(backupPath))
         {
-            File.Copy(VencordPatcherPath, backupPath);
+            File.WriteAllText(backupPath, clean + Environment.NewLine);
         }
 
-        File.WriteAllText(VencordPatcherPath, existing + Environment.NewLine + VencordPatchSource);
+        File.WriteAllText(VencordPatcherPath, updated);
         return true;
+    }
+
+    private static string RemoveBridgeBlocks(string source)
+    {
+        var result = source;
+        while (true)
+        {
+            var begin = result.IndexOf(VencordBeginMarker, StringComparison.Ordinal);
+            if (begin < 0)
+            {
+                return result;
+            }
+
+            var end = result.IndexOf(VencordEndMarker, begin + VencordBeginMarker.Length, StringComparison.Ordinal);
+            result = end < 0
+                ? result[..begin]
+                : result[..begin] + result[(end + VencordEndMarker.Length)..];
+        }
+    }
+
+    private static string? ExtractBridgeBlock(string source)
+    {
+        var begin = source.IndexOf(VencordBeginMarker, StringComparison.Ordinal);
+        var end = source.IndexOf(VencordEndMarker, begin + VencordBeginMarker.Length, StringComparison.Ordinal);
+        return begin >= 0 && end >= 0
+            ? source[begin..(end + VencordEndMarker.Length)].Trim()
+            : null;
+    }
+
+    private static int CountOccurrences(string source, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = source.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+        return count;
     }
 
     private const string PluginSource = """
 /**
  * @name NoiseToggleBridge
- * @description Local-only bridge for NoiseToggle. Exposes Discord Krisp/noise suppression control on 127.0.0.1.
- * @version 1.0.0
- * @author Codex
+ * @description Authenticated localhost bridge for NoiseToggle Discord Krisp control.
+ * @version 2.0.0
+ * @author Extrautior
  */
 module.exports = class NoiseToggleBridge {
     start() {
+        const crypto = require("crypto");
         const fs = require("fs");
-        const path = require("path");
         const http = require("http");
+        const path = require("path");
         const settingsPath = path.join(process.env.APPDATA, "NoiseToggle", "settings.json");
-        const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+        const readSettings = () => JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+
+        const unwrap = module => [module, module?.default, module?.Z, module?.ZP]
+            .filter((value, index, values) => value && values.indexOf(value) === index);
+        const setterNames = [
+            "setNoiseCancellation", "setNoiseCancellationEnabled", "setNoiseSuppression",
+            "setNoiseSuppressionEnabled", "setInputNoiseCancellation", "setKrispEnabled", "setKrisp"
+        ];
+        const getterNames = [
+            "getNoiseCancellation", "isNoiseCancellationEnabled", "getNoiseCancellationEnabled",
+            "getNoiseSuppression", "isNoiseSuppressionEnabled", "getNoiseSuppressionEnabled",
+            "getInputNoiseCancellation", "getKrispEnabled", "isKrispEnabled"
+        ];
+
+        const findModule = predicate => {
+            const webpack = globalThis.BdApi?.Webpack;
+            const matchingExport = module => unwrap(module).find(predicate) || null;
+            try {
+                const found = webpack?.getModule?.(module => !!matchingExport(module));
+                return matchingExport(found);
+            } catch {
+                return null;
+            }
+        };
+        const usable = candidate => candidate && candidate[Symbol.toStringTag] !== "IntlMessagesProxy";
+        const findStore = () => findModule(candidate =>
+            usable(candidate) &&
+            getterNames.some(name => typeof candidate[name] === "function") &&
+            (typeof candidate.getMediaEngine === "function" || typeof candidate.getInputDeviceId === "function"));
+        const findActions = () => findModule(candidate =>
+            usable(candidate) &&
+            setterNames.some(name => typeof candidate[name] === "function") &&
+            (typeof candidate.setNoiseSuppression === "function" || typeof candidate.setInputDevice === "function"));
+
+        const readState = store => {
+            for (const name of getterNames) {
+                if (typeof store?.[name] === "function") return { enabled: !!store[name](), getter: name };
+            }
+            throw new Error("Discord media engine store has no supported Krisp getter");
+        };
+
+        const setState = async enabled => {
+            const store = findStore();
+            const actions = findActions();
+            if (!store) throw new Error("Discord media engine store was not found");
+            if (!actions) throw new Error("Discord media engine actions were not found");
+            const setter = setterNames.find(name => typeof actions[name] === "function");
+            if (!setter) throw new Error("Discord media engine actions have no supported Krisp setter");
+            await Promise.resolve(actions[setter](enabled));
+            for (let attempt = 0; attempt < 20; attempt++) {
+                const state = readState(store);
+                if (state.enabled === enabled) return { ...state, setter };
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            throw new Error("Discord Krisp live state did not match the requested value");
+        };
+
+        const send = (res, status, payload) => {
+            const body = JSON.stringify(payload);
+            res.writeHead(status, {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(body),
+                "Cache-Control": "no-store"
+            });
+            res.end(body);
+        };
+        const loopback = req => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket?.remoteAddress);
+        const sameToken = (actual, expected) => {
+            const left = Buffer.from(actual || "");
+            const right = Buffer.from(expected || "");
+            return left.length === right.length && left.length > 0 && crypto.timingSafeEqual(left, right);
+        };
+
+        const settings = readSettings();
         const token = settings.BridgeToken || settings.bridgeToken;
         const port = settings.BridgePort || settings.bridgePort || 28473;
-
-        const findModule = filter => {
-            if (globalThis.Vencord?.Webpack?.find) return globalThis.Vencord.Webpack.find(filter);
-            if (globalThis.Vencord?.Webpack?.findByProps) {
-                try {
-                    const result = globalThis.Vencord.Webpack.findByProps("getNoiseCancellation");
-                    if (result && filter(result)) return result;
-                } catch {}
-            }
-            if (globalThis.BdApi?.Webpack?.getModule) return globalThis.BdApi.Webpack.getModule(filter);
-            return null;
-        };
-
-        const findVoice = () => {
-            const candidates = [
-                m => m?.setNoiseCancellation && (m?.getNoiseCancellation || m?.isNoiseCancellationEnabled),
-                m => m?.setNoiseSuppression && (m?.getNoiseSuppression || m?.isNoiseSuppressionEnabled),
-                m => m?.setKrispEnabled || m?.getKrispEnabled
-            ];
-            for (const filter of candidates) {
-                const mod = findModule(filter);
-                if (mod) return mod;
-            }
-            return null;
-        };
-
-        const getState = () => {
-            const voice = findVoice();
-            if (!voice) throw new Error("Could not find Discord voice/noise suppression module");
-            if (typeof voice.getNoiseCancellation === "function") return !!voice.getNoiseCancellation();
-            if (typeof voice.isNoiseCancellationEnabled === "function") return !!voice.isNoiseCancellationEnabled();
-            if (typeof voice.getNoiseSuppression === "function") return !!voice.getNoiseSuppression();
-            if (typeof voice.isNoiseSuppressionEnabled === "function") return !!voice.isNoiseSuppressionEnabled();
-            if (typeof voice.getKrispEnabled === "function") return !!voice.getKrispEnabled();
-            return false;
-        };
-
-        const setState = enabled => {
-            const voice = findVoice();
-            if (!voice) throw new Error("Could not find Discord voice/noise suppression module");
-            if (typeof voice.setNoiseCancellation === "function") return voice.setNoiseCancellation(enabled);
-            if (typeof voice.setNoiseSuppression === "function") return voice.setNoiseSuppression(enabled);
-            if (typeof voice.setKrispEnabled === "function") return voice.setKrispEnabled(enabled);
-            throw new Error("Found voice module but no supported setter");
-        };
-
-        const authOk = req => req.headers.authorization === `Bearer ${token}`;
         this.server = http.createServer((req, res) => {
-            const send = (code, payload) => {
-                res.writeHead(code, { "Content-Type": "application/json" });
-                res.end(JSON.stringify(payload));
-            };
-
-            if (!authOk(req)) return send(401, { error: "Unauthorized" });
-
-            try {
-                if (req.method === "GET" && req.url === "/state") {
-                    return send(200, { krispEnabled: getState(), KrispEnabled: getState() });
-                }
-
-                if (req.method === "POST" && req.url === "/krisp") {
-                    let body = "";
-                    req.on("data", chunk => body += chunk);
-                    req.on("end", () => {
-                        try {
-                            const payload = JSON.parse(body || "{}");
-                            setState(!!payload.enabled);
-                            send(200, { ok: true, krispEnabled: getState(), KrispEnabled: getState() });
-                        } catch (err) {
-                            send(500, { error: String(err?.message || err) });
-                        }
-                    });
-                    return;
-                }
-
-                send(404, { error: "Not found" });
-            } catch (err) {
-                send(500, { error: String(err?.message || err) });
+            if (!loopback(req) || !sameToken(req.headers.authorization, `Bearer ${token}`)) {
+                return send(res, 401, { error: "Unauthorized" });
             }
+            if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true, bridgeVersion: 2 });
+
+            if (req.method === "GET" && req.url === "/state") {
+                try {
+                    const state = readState(findStore());
+                    return send(res, 200, { krispEnabled: state.enabled, KrispEnabled: state.enabled });
+                } catch (error) {
+                    return send(res, 500, { error: String(error?.message || error) });
+                }
+            }
+            if (req.method === "POST" && req.url === "/krisp") {
+                let body = "";
+                req.on("data", chunk => {
+                    body += chunk;
+                    if (body.length > 64 * 1024) req.destroy();
+                });
+                req.on("end", async () => {
+                    try {
+                        const enabled = JSON.parse(body || "{}").enabled;
+                        if (typeof enabled !== "boolean") return send(res, 400, { error: "enabled must be boolean" });
+                        const state = await setState(enabled);
+                        send(res, 200, { ok: true, krispEnabled: state.enabled, KrispEnabled: state.enabled });
+                    } catch (error) {
+                        send(res, 500, { error: String(error?.message || error) });
+                    }
+                });
+                return;
+            }
+            send(res, 404, { error: "Not found" });
         });
         this.server.listen(port, "127.0.0.1");
-        console.log(`[NoiseToggleBridge] Listening on 127.0.0.1:${port}`);
     }
 
     stop() {
-        if (this.server) {
-            this.server.close();
-            this.server = null;
-        }
+        this.server?.close();
+        this.server = null;
     }
 };
 """;
 
-    private const string VencordPatchSource = """
+    internal const string VencordPatchSource = """
 /* NoiseToggleBridge BEGIN */
+/* NoiseToggleBridge VERSION 2 */
 (() => {
-    if (global.__NoiseToggleBridgeStarted) return;
-    global.__NoiseToggleBridgeStarted = true;
+    if (global.__NoiseToggleBridgeVersion === 2) return;
+    global.__NoiseToggleBridgeVersion = 2;
 
-    const fs = require("fs");
-    const path = require("path");
-    const http = require("http");
+    const crypto = require("crypto");
     const electron = require("electron");
-
+    const fs = require("fs");
+    const http = require("http");
+    const path = require("path");
     const settingsPath = path.join(process.env.APPDATA, "NoiseToggle", "settings.json");
     const readSettings = () => JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+
     const getDiscordWindow = () => {
-        const windows = electron.BrowserWindow.getAllWindows();
-        return windows.find(w => {
+        const windows = electron.BrowserWindow.getAllWindows().filter(window => !window.isDestroyed());
+        return windows.find(window => {
             try {
-                const url = w.webContents.getURL();
-                return !w.isDestroyed() && /discord(app)?\.com|discord\.com/.test(url);
+                return /^https:\/\/(canary\.|ptb\.)?discord\.com\//i.test(window.webContents.getURL());
             } catch {
                 return false;
             }
-        }) || windows.find(w => !w.isDestroyed());
+        }) || windows[0];
     };
 
     const rendererSource = enabled => `
-        (() => {
+        (async () => {
             const requested = ${enabled};
             const W = globalThis.Vencord?.Webpack;
             const BD = globalThis.BdApi?.Webpack;
-
-            const unwrap = module => {
-                const out = [];
-                const add = value => {
-                    if (value && typeof value === "object" && !out.includes(value)) out.push(value);
-                };
-                add(module);
-                add(module?.default);
-                add(module?.Z);
-                add(module?.ZP);
-                return out;
-            };
-
-            const hasAny = (module, props) => unwrap(module).some(value => props.some(prop => typeof value?.[prop] === "function"));
-            const findByAnyProps = props => {
-                const found = [];
-                const add = module => unwrap(module).forEach(value => {
-                    if (value && !found.includes(value)) found.push(value);
-                });
-
-                for (const prop of props) {
-                    try { if (W?.findByProps) add(W.findByProps(prop)); } catch {}
-                    try { if (BD?.getByKeys) add(BD.getByKeys(prop)); } catch {}
-                }
-
-                try { if (W?.find) add(W.find(module => hasAny(module, props))); } catch {}
-                try { if (BD?.getModule) add(BD.getModule(module => hasAny(module, props))); } catch {}
-
-                return found.find(value => props.some(prop => typeof value?.[prop] === "function")) || null;
-            };
-
             const setterNames = [
-                "setNoiseCancellation",
-                "setNoiseCancellationEnabled",
-                "setNoiseSuppression",
-                "setNoiseSuppressionEnabled",
-                "setInputNoiseCancellation",
-                "setKrispEnabled",
-                "setKrisp",
-                "toggleNoiseCancellation",
-                "toggleNoiseSuppression"
+                "setNoiseCancellation", "setNoiseCancellationEnabled", "setNoiseSuppression",
+                "setNoiseSuppressionEnabled", "setInputNoiseCancellation", "setKrispEnabled", "setKrisp"
             ];
             const getterNames = [
-                "getNoiseCancellation",
-                "isNoiseCancellationEnabled",
-                "getNoiseCancellationEnabled",
-                "getNoiseSuppression",
-                "isNoiseSuppressionEnabled",
-                "getNoiseSuppressionEnabled",
-                "getInputNoiseCancellation",
-                "getKrispEnabled",
-                "isKrispEnabled"
+                "getNoiseCancellation", "isNoiseCancellationEnabled", "getNoiseCancellationEnabled",
+                "getNoiseSuppression", "isNoiseSuppressionEnabled", "getNoiseSuppressionEnabled",
+                "getInputNoiseCancellation", "getKrispEnabled", "isKrispEnabled"
             ];
-
-            const voice = findByAnyProps([...setterNames, ...getterNames]);
-            if (!voice) throw new Error("Discord voice/noise suppression module was not found");
-
-            const getState = () => {
-                for (const name of getterNames) {
-                    if (typeof voice[name] === "function") return !!voice[name]();
-                }
-
-                return requested === null ? false : !!requested;
+            const unwrap = module => [module, module?.default, module?.Z, module?.ZP]
+                .filter((value, index, values) => value && values.indexOf(value) === index);
+            const usable = candidate => candidate && candidate[Symbol.toStringTag] !== "IntlMessagesProxy";
+            const findModule = predicate => {
+                const matchingExport = module => unwrap(module).find(predicate) || null;
+                try {
+                    const found = W?.find?.(module => !!matchingExport(module));
+                    const match = matchingExport(found);
+                    if (match) return match;
+                } catch {}
+                try {
+                    const found = BD?.getModule?.(module => !!matchingExport(module));
+                    const match = matchingExport(found);
+                    if (match) return match;
+                } catch {}
+                return null;
             };
+            const findStore = () => findModule(candidate =>
+                usable(candidate) &&
+                getterNames.some(name => typeof candidate[name] === "function") &&
+                (typeof candidate.getMediaEngine === "function" || typeof candidate.getInputDeviceId === "function"));
+            const findActions = () => findModule(candidate =>
+                usable(candidate) &&
+                setterNames.some(name => typeof candidate[name] === "function") &&
+                (typeof candidate.setNoiseSuppression === "function" || typeof candidate.setInputDevice === "function"));
 
-            if (requested !== null) {
-                let called = false;
-                for (const name of setterNames) {
-                    if (typeof voice[name] === "function") {
-                        voice[name](!!requested);
-                        called = true;
-                        break;
-                    }
-                }
-
-                if (!called) throw new Error("Discord voice module has no supported Krisp setter");
+            let store = null;
+            let actions = null;
+            for (let attempt = 0; attempt < 50; attempt++) {
+                store = findStore();
+                actions = requested === null ? null : findActions();
+                if (store && (requested === null || actions)) break;
+                await new Promise(resolve => setTimeout(resolve, 100));
             }
+            if (!store) throw new Error("Discord media engine store was not found");
 
-            return getState();
+            const readState = () => {
+                for (const name of getterNames) {
+                    if (typeof store[name] === "function") return { enabled: !!store[name](), getter: name };
+                }
+                throw new Error("Discord media engine store has no supported Krisp getter");
+            };
+            if (requested === null) return { ok: true, ...readState() };
+
+            if (!actions) throw new Error("Discord media engine actions were not found");
+            const setter = setterNames.find(name => typeof actions[name] === "function");
+            if (!setter) throw new Error("Discord media engine actions have no supported Krisp setter");
+            await Promise.resolve(actions[setter](requested));
+            for (let attempt = 0; attempt < 20; attempt++) {
+                const state = readState();
+                if (state.enabled === requested) return { ok: true, ...state, setter };
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            const state = readState();
+            return { ok: false, ...state, setter, error: "live-state-mismatch" };
         })();
     `;
 
     const evalInDiscord = async enabled => {
-        const win = getDiscordWindow();
-        if (!win) throw new Error("Discord window was not found");
-        return await win.webContents.executeJavaScript(rendererSource(enabled), true);
+        const window = getDiscordWindow();
+        if (!window) throw new Error("Discord window was not found");
+        return await window.webContents.executeJavaScript(rendererSource(enabled), true);
     };
-
-    const send = (res, code, payload) => {
-        res.writeHead(code, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(payload));
+    const send = (res, status, payload) => {
+        const body = JSON.stringify(payload);
+        res.writeHead(status, {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+            "Cache-Control": "no-store"
+        });
+        res.end(body);
+    };
+    const loopback = req => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket?.remoteAddress);
+    const sameToken = (actual, expected) => {
+        const left = Buffer.from(actual || "");
+        const right = Buffer.from(expected || "");
+        return left.length === right.length && left.length > 0 && crypto.timingSafeEqual(left, right);
     };
 
     const start = () => {
         let settings;
         try {
             settings = readSettings();
-        } catch (err) {
-            console.error("[NoiseToggleBridge] Missing settings:", err);
+        } catch (error) {
+            console.error("[NoiseToggleBridge] Missing settings:", error);
             return;
         }
 
         const port = settings.BridgePort || settings.bridgePort || 28473;
         const token = settings.BridgeToken || settings.bridgeToken;
         const server = http.createServer((req, res) => {
-            if (req.headers.authorization !== `Bearer ${token}`) {
-                send(res, 401, { error: "Unauthorized" });
-                return;
+            if (!loopback(req) || !sameToken(req.headers.authorization, `Bearer ${token}`)) {
+                return send(res, 401, { error: "Unauthorized" });
             }
-
+            if (req.method === "GET" && req.url === "/health") {
+                return send(res, 200, { ok: true, bridgeVersion: 2 });
+            }
             if (req.method === "GET" && req.url === "/state") {
                 evalInDiscord(null)
-                    .then(state => send(res, 200, { krispEnabled: !!state, KrispEnabled: !!state }))
-                    .catch(err => send(res, 500, { error: String(err?.message || err) }));
+                    .then(state => {
+                        if (!state?.ok || typeof state.enabled !== "boolean") {
+                            return send(res, 500, { error: state?.error || "Discord Krisp live state was unavailable" });
+                        }
+                        send(res, 200, { krispEnabled: state.enabled, KrispEnabled: state.enabled });
+                    })
+                    .catch(error => send(res, 500, { error: String(error?.message || error) }));
                 return;
             }
-
             if (req.method === "POST" && req.url === "/krisp") {
                 let body = "";
-                req.on("data", chunk => body += chunk);
+                req.on("data", chunk => {
+                    body += chunk;
+                    if (body.length > 64 * 1024) req.destroy();
+                });
                 req.on("end", () => {
-                    let enabled = false;
                     try {
-                        enabled = !!JSON.parse(body || "{}").enabled;
-                    } catch {}
-
-                    evalInDiscord(enabled)
-                        .then(state => send(res, 200, { ok: true, krispEnabled: !!state, KrispEnabled: !!state }))
-                        .catch(err => send(res, 500, { error: String(err?.message || err) }));
+                        const enabled = JSON.parse(body || "{}").enabled;
+                        if (typeof enabled !== "boolean") {
+                            return send(res, 400, { error: "enabled must be boolean" });
+                        }
+                        evalInDiscord(enabled)
+                            .then(state => {
+                                if (!state?.ok || state.enabled !== enabled) {
+                                    return send(res, 500, { error: state?.error || "Discord Krisp live state did not change" });
+                                }
+                                send(res, 200, { ok: true, krispEnabled: state.enabled, KrispEnabled: state.enabled });
+                            })
+                            .catch(error => send(res, 500, { error: String(error?.message || error) }));
+                    } catch (error) {
+                        send(res, 400, { error: String(error?.message || error) });
+                    }
                 });
                 return;
             }
-
             send(res, 404, { error: "Not found" });
         });
 
-        server.on("error", err => console.error("[NoiseToggleBridge] Server error:", err));
-        server.listen(port, "127.0.0.1", () => console.log(`[NoiseToggleBridge] Listening on 127.0.0.1:${port}`));
+        server.on("error", error => console.error("[NoiseToggleBridge] Server error:", error));
+        server.listen(port, "127.0.0.1", () =>
+            console.log(`[NoiseToggleBridge] v2 listening on 127.0.0.1:${port}`));
     };
 
     try {
         electron.app?.whenReady ? electron.app.whenReady().then(start) : start();
-    } catch (err) {
-        console.error("[NoiseToggleBridge] Startup failed:", err);
+    } catch (error) {
+        console.error("[NoiseToggleBridge] Startup failed:", error);
     }
 })();
 /* NoiseToggleBridge END */

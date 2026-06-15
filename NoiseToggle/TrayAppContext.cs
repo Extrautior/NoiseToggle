@@ -21,6 +21,10 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         _settings = AppSettings.Load();
         _settings.StartWithWindows = StartupManager.IsEnabled();
+        if (_settings.StartWithWindows)
+        {
+            StartupManager.SetEnabled(true);
+        }
         _settings.Save();
         _discord = new DiscordBridgeClient(_settings);
         _broadcast = new BroadcastController(_settings);
@@ -113,6 +117,8 @@ internal sealed class TrayAppContext : ApplicationContext
             }
             else if (successes > 0)
             {
+                UpdateStatus($"Partial: {nextMode} ({_settings.Hotkey})");
+                AppLog.Info($"Partial toggle to {nextMode}: {string.Join("; ", failures)}");
                 if (showBalloon)
                 {
                     ShowBalloon("NoiseToggle partial toggle", string.Join(Environment.NewLine, failures), ToolTipIcon.Warning);
@@ -463,7 +469,7 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         try
         {
-            if (Directory.Exists(BridgeInstaller.PluginDirectory))
+            if (Directory.Exists(BridgeInstaller.PluginDirectory) || File.Exists(BridgeInstaller.VencordPatcherPath))
             {
                 BridgeInstaller.Install(_settings);
             }

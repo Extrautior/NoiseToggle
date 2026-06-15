@@ -8,6 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>noisetoggle.ico</ApplicationIcon>
     <AssemblyName>NoiseToggleSetup</AssemblyName>
+    <Version>0.1.5</Version>
   </PropertyGroup>
 
   <ItemGroup>

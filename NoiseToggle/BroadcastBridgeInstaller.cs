@@ -18,7 +18,7 @@ internal static class BroadcastBridgeInstaller
         Process.Start(new ProcessStartInfo
         {
             FileName = "powershell.exe",
-            Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{installerPath}\"",
+            Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{installerPath}\"",
             UseShellExecute = true,
             Verb = "runas"
         });
@@ -35,7 +35,7 @@ internal static class BroadcastBridgeInstaller
         Process.Start(new ProcessStartInfo
         {
             FileName = "powershell.exe",
-            Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{restorePath}\"",
+            Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{restorePath}\"",
             UseShellExecute = true,
             Verb = "runas"
         });
