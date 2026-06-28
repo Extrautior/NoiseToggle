@@ -192,7 +192,7 @@ internal sealed class TrayAppContext : ApplicationContext
         var successes = 0;
         if (krisp)
         {
-            if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcastNoiseRemoval, token), failures, TimeSpan.FromSeconds(10)))
+            if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcastNoiseRemoval, token), failures, TimeSpan.FromSeconds(30)))
             {
                 successes++;
             }
@@ -209,7 +209,7 @@ internal sealed class TrayAppContext : ApplicationContext
                 successes++;
             }
 
-            if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcastNoiseRemoval, token), failures, TimeSpan.FromSeconds(10)))
+            if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcastNoiseRemoval, token), failures, TimeSpan.FromSeconds(30)))
             {
                 successes++;
             }
@@ -310,7 +310,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
             if (snapshot.BroadcastNoiseRemovalEnabled is bool broadcast)
             {
-                if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcast, token), failures, TimeSpan.FromSeconds(10)))
+                if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcast, token), failures, TimeSpan.FromSeconds(30)))
                 {
                     successes++;
                 }
