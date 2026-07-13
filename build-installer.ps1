@@ -13,6 +13,8 @@ $installerPayload = Join-Path $root "NoiseToggle.Installer\Payload\NoiseTogglePa
 $installerPublish = Join-Path $root "publish\installer-$Runtime"
 $setupOut = Join-Path $root "publish\NoiseToggleSetup.exe"
 
+New-Item -ItemType Directory -Path (Split-Path -Parent $installerPayload) -Force | Out-Null
+
 if (Test-Path -LiteralPath $appPublish) {
     Remove-Item -LiteralPath $appPublish -Recurse -Force
 }

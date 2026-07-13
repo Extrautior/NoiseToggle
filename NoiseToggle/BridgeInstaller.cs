@@ -1,3 +1,7 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
 namespace NoiseToggle;
 
 internal static class BridgeInstaller
@@ -7,8 +11,13 @@ internal static class BridgeInstaller
 
     public static string PluginPath => Path.Combine(PluginDirectory, "NoiseToggleBridge.plugin.js");
 
-    public static string VencordPatcherPath =>
+    private static string DefaultVencordPatcherPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Vencord", "dist", "patcher.js");
+
+    public static string VencordPatcherPath =>
+        VencordPatcherPaths.FirstOrDefault(File.Exists) ?? DefaultVencordPatcherPath;
+
+    public static IReadOnlyList<string> VencordPatcherPaths => DiscoverVencordPatcherPaths();
 
     private const string VencordBeginMarker = "/* NoiseToggleBridge BEGIN */";
     private const string VencordEndMarker = "/* NoiseToggleBridge END */";
@@ -34,15 +43,19 @@ internal static class BridgeInstaller
 
     public static bool IsVencordBridgeCurrent()
     {
-        if (!File.Exists(VencordPatcherPath))
+        var patchers = VencordPatcherPaths.Where(File.Exists).ToArray();
+        if (patchers.Length == 0)
         {
             return false;
         }
 
-        var existing = File.ReadAllText(VencordPatcherPath);
-        return CountOccurrences(existing, VencordBeginMarker) == 1 &&
-               CountOccurrences(existing, VencordEndMarker) == 1 &&
-               ExtractBridgeBlock(existing) == VencordPatchSource.Trim();
+        return patchers.All(path =>
+        {
+            var existing = File.ReadAllText(path);
+            return CountOccurrences(existing, VencordBeginMarker) == 1 &&
+                   CountOccurrences(existing, VencordEndMarker) == 1 &&
+                   ExtractBridgeBlock(existing) == VencordPatchSource.Trim();
+        });
     }
 
     private static bool InstallBetterDiscordPlugin()
@@ -58,27 +71,87 @@ internal static class BridgeInstaller
 
     private static bool InstallVencordPatch()
     {
-        if (!File.Exists(VencordPatcherPath))
+        var installed = false;
+        foreach (var path in VencordPatcherPaths.Where(File.Exists))
         {
-            return false;
+            InstallVencordPatch(path);
+            installed = true;
         }
 
-        var existing = File.ReadAllText(VencordPatcherPath);
+        return installed;
+    }
+
+    private static void InstallVencordPatch(string patcherPath)
+    {
+        var existing = File.ReadAllText(patcherPath);
         var clean = RemoveBridgeBlocks(existing).TrimEnd();
         var updated = clean + Environment.NewLine + Environment.NewLine + VencordPatchSource.Trim() + Environment.NewLine;
         if (updated == existing)
         {
-            return true;
+            return;
         }
 
-        var backupPath = VencordPatcherPath + ".noisetoggle.bak";
+        var backupPath = patcherPath + ".noisetoggle.bak";
         if (!File.Exists(backupPath))
         {
             File.WriteAllText(backupPath, clean + Environment.NewLine);
         }
 
-        File.WriteAllText(VencordPatcherPath, updated);
-        return true;
+        File.WriteAllText(patcherPath, updated);
+    }
+
+    private static IReadOnlyList<string> DiscoverVencordPatcherPaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            DefaultVencordPatcherPath
+        };
+
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        foreach (var discordFolder in new[] { "Discord", "DiscordCanary", "DiscordPTB" })
+        {
+            var root = Path.Combine(localAppData, discordFolder);
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            foreach (var appDirectory in Directory.EnumerateDirectories(root, "app-*"))
+            {
+                var asarPath = Path.Combine(appDirectory, "resources", "app.asar");
+                TryDiscoverDevPatcher(asarPath, paths);
+            }
+        }
+
+        return paths.ToArray();
+    }
+
+    private static void TryDiscoverDevPatcher(string asarPath, HashSet<string> paths)
+    {
+        try
+        {
+            if (!File.Exists(asarPath) || new FileInfo(asarPath).Length > 1024 * 1024)
+            {
+                return;
+            }
+
+            var text = Encoding.UTF8.GetString(File.ReadAllBytes(asarPath));
+            var match = Regex.Match(text, "require\\(\\\"(?<path>[A-Za-z]:\\\\\\\\[^\\\"]+patcher\\.js)\\\"\\)");
+            if (!match.Success)
+            {
+                return;
+            }
+
+            var patcherPath = JsonSerializer.Deserialize<string>($"\"{match.Groups["path"].Value}\"");
+            if (!string.IsNullOrWhiteSpace(patcherPath))
+            {
+                paths.Add(Path.GetFullPath(patcherPath));
+            }
+        }
+        catch
+        {
+            // A normal packaged Discord app has a binary app.asar with no development patcher path.
+        }
     }
 
     private static string RemoveBridgeBlocks(string source)

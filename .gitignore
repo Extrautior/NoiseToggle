@@ -8,3 +8,5 @@ NoiseToggle.Installer/Payload/*.zip
 *.pdb
 scratch-*.js
 broadcast-debug*.json
+StreamBoostNative/node_modules/
+StreamBoostNative/build/

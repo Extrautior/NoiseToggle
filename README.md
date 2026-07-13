@@ -11,15 +11,21 @@ NoiseToggle is a lightweight Windows tray app for switching microphone noise sup
 - NVIDIA Broadcast bridge installer and restore action from the tray menu
 - Per-game auto switching with installed-game scan and running-process picker
 - Exact pre-game Broadcast and Krisp state restoration when the game exits
+- Automatic outgoing Discord Go Live audio boost for application and full-desktop streams
+- Vencord StreamBoost voice-control popup and slider from 100% to 1000%, with the equivalent dB value shown while adjusting
+- Soft peak compression that preserves audible gain while preventing boosted stream audio from clipping
+- Discord voice exclusion during full-desktop capture, preventing viewers from hearing themselves
 - Settings stored in `%APPDATA%\NoiseToggle\settings.json`
 
 ## Current compatibility
 
-NoiseToggle v0.1.7 was verified on June 28, 2026 with:
+NoiseToggle v0.2.0 was verified on July 13, 2026 with:
 
 - NVIDIA Broadcast `2.2.0.10298`
-- Discord Stable `1.0.9241`
-- Vencord patcher commit `e8415d7`
+- Discord Stable `1.0.9245`
+- Vencord commit `94cc541`
+- Windows 11 build `26200`
+- VB-Audio CABLE render endpoint
 
 The bridge protocols use an authenticated random token, bind only to `127.0.0.1`, and verify the live effect state after every change.
 
@@ -78,11 +84,47 @@ The Broadcast bridge reads and changes the live microphone noise-removal effect 
 
 The Vencord bridge removes outdated NoiseToggle blocks before inserting one current block. BetterDiscord remains supported through `NoiseToggleBridge.plugin.js`.
 
+## Discord StreamBoost
+
+The desktop-only custom Vencord plugin lives in `VencordPlugins/StreamBoost`.
+Its primary Windows backend hooks Discord's final `AudioSendStream::SendAudioData`
+stage and amplifies stereo/multichannel sound-share `AudioFrame` PCM immediately
+before WebRTC consumes it. Normal mono microphone frames bypass the gain. This has
+no second capture path, virtual-device latency, or change to headphone volume.
+
+The older NoiseToggle relay remains an automatic compatibility fallback when a
+future Discord update fails the native hook's structural safety checks:
+
+- Application/game streams capture only the selected process and its child processes.
+- Full-desktop streams capture everything except Discord's process tree. Discord
+  launches the relay as its child, so the same exclusion also prevents relay feedback.
+- Audio is rendered to an active `CABLE Input`/`CABLE In` endpoint, so the boosted
+  copy is not played through the streamer's headphones.
+- If the direct hook and relay fallback are both unavailable, Discord keeps its
+  original sound-share source and shows an error toast instead of changing system volume.
+- Stopping the stream leaves the silent relay pre-warmed for the next Go Live.
+  Disabling the plugin or quitting Discord stops it.
+
+To build the plugin, copy or link `VencordPlugins/StreamBoost` to
+`src/userplugins/streamBoost.desktop` in a Vencord source checkout, then run:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm build
+pnpm inject
+```
+
+Enable **StreamBoost** under **Vencord Settings → Plugins** and restart Discord once.
+Use the StreamBoost icon beside Discord's Krisp and disconnect controls to open its
+small gain popup, or use the plugin's cog button for the same setting. Custom Vencord plugins
+are compiled into Vencord, so rebuild after updating Vencord.
+
 ## Build
 
 Requires the .NET 9 SDK on Windows.
 
 ```powershell
+git submodule update --init --recursive
 .\build-installer.ps1
 ```
 
