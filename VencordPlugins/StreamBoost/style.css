@@ -1,3 +1,23 @@
+.vc-streamboost-stream-card-controls {
+    display: flex !important;
+    flex-flow: row nowrap !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    width: auto !important;
+    min-width: 68px !important;
+    height: 32px !important;
+    gap: 4px;
+}
+
+.vc-streamboost-stream-card-host {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+}
+
 .vc-streamboost-control-button {
     display: flex;
     align-items: center;
@@ -5,7 +25,7 @@
     width: 32px;
     height: 32px;
     padding: 0;
-    color: var(--interactive-normal);
+    color: #b5bac1;
     background: transparent;
     border: 0;
     border-radius: 8px;
@@ -14,8 +34,8 @@
 }
 
 .vc-streamboost-control-button:hover {
-    color: var(--interactive-hover);
-    background: var(--background-modifier-hover);
+    color: #dbdee1;
+    background: var(--background-modifier-hover, rgb(79 84 92 / 40%));
     transform: translateY(-1px);
 }
 

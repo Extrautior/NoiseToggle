@@ -61,6 +61,8 @@ let prewarmPromise: Promise<void> | null = null;
 let notReadyToastShown = false;
 let activeBackend: "direct" | "relay" | null = null;
 let directPreparePromise: Promise<boolean> | null = null;
+const streamCardHostClass = "vc-streamboost-stream-card-host";
+const streamCardControlsClass = "vc-streamboost-stream-card-controls";
 
 function directHook(): DirectHookBridge | undefined {
     return window.StreamBoostDirect;
@@ -151,8 +153,8 @@ function VoiceControl() {
 
     return (
         <Popout
-            position="top"
-            align="right"
+            position="right"
+            align="top"
             animation={Popout.Animation.NONE}
             shouldShow={show}
             onRequestClose={() => setShow(false)}
@@ -182,25 +184,56 @@ function VoiceControl() {
     );
 }
 
-function findVoiceControlsTarget(): HTMLElement | null {
-    const disconnect = document.querySelector<HTMLElement>('button[aria-label="Disconnect"]');
-    const krisp = Array.from(document.querySelectorAll<HTMLElement>("button[aria-label]"))
-        .find(button => /Krisp/i.test(button.getAttribute("aria-label") ?? ""));
-    if (!disconnect || !krisp) return null;
+function findStopStreamButton(): HTMLElement | null {
+    const stopStream = Array.from(document.querySelectorAll<HTMLElement>("button, [role=button]"))
+        .find(button => {
+            const description = [
+                button.getAttribute("aria-label"),
+                button.getAttribute("title"),
+                button.getAttribute("data-tooltip-text")
+            ].filter(Boolean).join(" ");
 
-    let commonParent = disconnect.parentElement;
-    while (commonParent && !commonParent.contains(krisp)) commonParent = commonParent.parentElement;
-    return commonParent;
+            return /stop.*(?:stream|screen)|(?:stream|screen).*stop/i.test(description);
+        });
+
+    return stopStream ?? null;
 }
 
-function QuickControlPortal() {
+function ensureStreamCardControlHost(): HTMLElement | null {
+    const stopStream = findStopStreamButton();
+    const controls = stopStream?.parentElement;
+    if (!stopStream || !controls) return null;
+
+    controls.classList.add(streamCardControlsClass);
+
+    let host = controls.querySelector<HTMLElement>(`:scope > .${streamCardHostClass}`);
+    if (!host) {
+        host = document.createElement("div");
+        host.className = streamCardHostClass;
+        controls.insertBefore(host, stopStream);
+    }
+
+    return host;
+}
+
+function StreamCardControlPortal() {
     const [target, setTarget] = React.useState<HTMLElement | null>(null);
 
     React.useEffect(() => {
         let frame = 0;
+        let currentHost: HTMLElement | null = null;
         const refresh = () => {
             cancelAnimationFrame(frame);
-            frame = requestAnimationFrame(() => setTarget(findVoiceControlsTarget()));
+            frame = requestAnimationFrame(() => {
+                const nextHost = ensureStreamCardControlHost();
+                if (currentHost && currentHost !== nextHost) {
+                    const previousControls = currentHost.parentElement;
+                    currentHost.remove();
+                    previousControls?.classList.remove(streamCardControlsClass);
+                }
+                currentHost = nextHost;
+                setTarget(nextHost);
+            });
         };
 
         refresh();
@@ -209,6 +242,9 @@ function QuickControlPortal() {
         return () => {
             observer.disconnect();
             cancelAnimationFrame(frame);
+            const controls = currentHost?.parentElement;
+            currentHost?.remove();
+            controls?.classList.remove(streamCardControlsClass);
         };
     }, []);
 
@@ -429,7 +465,7 @@ export default definePlugin({
     }) {
         return (
             <>
-                <QuickControlPortal />
+                <StreamCardControlPortal />
                 <VencordOriginal {...props} />
             </>
         );
