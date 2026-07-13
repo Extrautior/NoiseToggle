@@ -115,8 +115,8 @@ pnpm inject
 ```
 
 Enable **StreamBoost** under **Vencord Settings → Plugins** and restart Discord once.
-Use the StreamBoost icon beside Discord's Krisp and disconnect controls to open its
-small gain popup, or use the plugin's cog button for the same setting. Custom Vencord plugins
+While sharing a screen, use the StreamBoost icon directly to the left of Discord's
+**Stop Streaming** button to open its small gain popup. Custom Vencord plugins
 are compiled into Vencord, so rebuild after updating Vencord.
 
 ## Build

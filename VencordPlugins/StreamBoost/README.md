@@ -10,7 +10,8 @@ checks no longer match, the plugin automatically falls back to NoiseToggle's
 headless audio relay. The relay stays pre-warmed, changes capture source in place,
 and keeps a stable process ID for both application and desktop streams.
 
-The StreamBoost icon beside Discord's Krisp and disconnect controls opens a small slider popup.
+While sharing a screen, the StreamBoost icon directly to the left of Discord's
+**Stop Streaming** button opens a small slider popup.
 The same slider is also available under **Vencord Settings → Plugins → StreamBoost**;
 both show the easy percentage and its decibel equivalent. Application streams
 capture only the selected process tree. Full-desktop streams capture everything
