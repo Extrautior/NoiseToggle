@@ -187,13 +187,15 @@ function VoiceControl() {
 function findStopStreamButton(): HTMLElement | null {
     const stopStream = Array.from(document.querySelectorAll<HTMLElement>("button, [role=button]"))
         .find(button => {
-            const description = [
+            const labels = [
                 button.getAttribute("aria-label"),
                 button.getAttribute("title"),
                 button.getAttribute("data-tooltip-text")
-            ].filter(Boolean).join(" ");
+            ].filter((label): label is string => Boolean(label));
 
-            return /stop.*(?:stream|screen)|(?:stream|screen).*stop/i.test(description);
+            // "Stop Watching" belongs to Discord's incoming stream viewer. Matching
+            // that control and styling its parent collapses the entire video canvas.
+            return labels.some(label => /^stop streaming$/i.test(label.trim()));
         });
 
     return stopStream ?? null;
