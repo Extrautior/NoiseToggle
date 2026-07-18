@@ -469,7 +469,7 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         try
         {
-            if (Directory.Exists(BridgeInstaller.PluginDirectory) || File.Exists(BridgeInstaller.VencordPatcherPath))
+            if (Directory.Exists(BridgeInstaller.PluginDirectory) || BridgeInstaller.VencordPatcherPaths.Any(File.Exists))
             {
                 BridgeInstaller.Install(_settings);
             }

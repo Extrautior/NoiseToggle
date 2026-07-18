@@ -1,0 +1,101 @@
+.vc-streamboost-stream-card-controls {
+    display: flex !important;
+    flex-flow: row nowrap !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    width: auto !important;
+    min-width: 68px !important;
+    height: 32px !important;
+    gap: 4px;
+}
+
+.vc-streamboost-stream-card-host {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+}
+
+.vc-streamboost-control-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    color: #b5bac1;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+.vc-streamboost-control-button:hover {
+    color: #dbdee1;
+    background: var(--background-modifier-hover, rgb(79 84 92 / 40%));
+    transform: translateY(-1px);
+}
+
+.vc-streamboost-control-button[aria-expanded="true"] {
+    color: white;
+    background: var(--brand-500);
+}
+
+.vc-streamboost-popout {
+    width: 280px;
+    padding: 14px;
+    color: #f2f3f5;
+    background: #1e1f22;
+    border: 1px solid rgb(78 80 88 / 100%);
+    border-radius: 10px;
+    box-shadow: var(--elevation-high);
+    isolation: isolate;
+}
+
+.vc-streamboost-popout-header,
+.vc-streamboost-popout-scale {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.vc-streamboost-popout-header {
+    gap: 12px;
+    margin-bottom: 4px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.vc-streamboost-popout-header strong {
+    color: var(--brand-360);
+    white-space: nowrap;
+}
+
+.vc-streamboost-popout-description {
+    margin-bottom: 7px;
+    color: #b5bac1;
+    font-size: 12px;
+    line-height: 16px;
+}
+
+.vc-streamboost-popout-status {
+    margin-bottom: 12px;
+    color: var(--text-positive);
+    font-size: 11px;
+    line-height: 15px;
+}
+
+.vc-streamboost-popout-slider {
+    width: 100%;
+    accent-color: var(--brand-500);
+    cursor: pointer;
+}
+
+.vc-streamboost-popout-scale {
+    margin-top: 7px;
+    color: #b5bac1;
+    font-size: 11px;
+}

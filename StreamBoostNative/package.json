@@ -1,0 +1,13 @@
+{
+  "name": "streamboost-native",
+  "version": "0.4.0",
+  "description": "Direct outgoing Discord sound-share gain hook for StreamBoost",
+  "private": true,
+  "scripts": {
+    "build": "node-gyp rebuild --release",
+    "test": "node test/addon.test.js"
+  },
+  "devDependencies": {
+    "node-gyp": "^11.2.0"
+  }
+}
