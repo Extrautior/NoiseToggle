@@ -20,6 +20,7 @@ internal sealed class AppSettings
     public bool AutoSwitchForGames { get; set; }
     public List<string> GameProcesses { get; set; } = [];
     public List<GameRule> GameRules { get; set; } = [];
+    public WaveLinkSettings WaveLink { get; set; } = new();
 
     public static string AppDirectory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NoiseToggle");
@@ -58,6 +59,8 @@ internal sealed class AppSettings
 
             loaded.MigrateGameProcesses();
             loaded.NormalizeGameRules();
+            loaded.WaveLink ??= new WaveLinkSettings();
+            loaded.WaveLink.Normalize();
 
             loaded.Save();
             return loaded;
@@ -77,6 +80,8 @@ internal sealed class AppSettings
         Directory.CreateDirectory(AppDirectory);
         MigrateGameProcesses();
         NormalizeGameRules();
+        WaveLink ??= new WaveLinkSettings();
+        WaveLink.Normalize();
         File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));
     }
 
@@ -118,6 +123,39 @@ internal sealed class AppSettings
             .Select(g => g.First())
             .OrderBy(r => r.ProcessName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+}
+
+internal sealed class WaveLinkSettings
+{
+    public bool Enabled { get; set; } = true;
+    public bool CaptureWheel { get; set; } = true;
+    public bool SelectForegroundOnPress { get; set; } = true;
+    public bool OnlyActiveChannels { get; set; } = true;
+    public bool ShowHud { get; set; } = true;
+    public string Host { get; set; } = "localhost";
+    public int Port { get; set; } = 8009;
+    public string Mix { get; set; } = "Personal Mix";
+    public List<string> Channels { get; set; } = [];
+    public int StepPercent { get; set; } = 5;
+    public float ActivityThreshold { get; set; } = 0.003f;
+    public int ActiveHoldMilliseconds { get; set; } = 3500;
+    public int HudMonitor { get; set; } = 2;
+    public int HudAutoHideMilliseconds { get; set; } = 1800;
+    public double HudOpacity { get; set; } = 0.86d;
+
+    public void Normalize()
+    {
+        Host = string.IsNullOrWhiteSpace(Host) ? "localhost" : Host.Trim();
+        Port = Math.Clamp(Port, 1, 65535);
+        Mix = string.IsNullOrWhiteSpace(Mix) ? "Personal Mix" : Mix.Trim();
+        Channels = Channels.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Take(12).ToList();
+        StepPercent = Math.Clamp(StepPercent, 1, 25);
+        ActivityThreshold = Math.Clamp(ActivityThreshold, 0.0001f, 0.25f);
+        ActiveHoldMilliseconds = Math.Clamp(ActiveHoldMilliseconds, 250, 30000);
+        HudMonitor = Math.Clamp(HudMonitor, 1, 16);
+        HudAutoHideMilliseconds = Math.Clamp(HudAutoHideMilliseconds, 500, 10000);
+        HudOpacity = Math.Clamp(HudOpacity, 0.65d, 0.98d);
     }
 }
 
