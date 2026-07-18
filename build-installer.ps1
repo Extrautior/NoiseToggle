@@ -10,6 +10,7 @@ $appProject = Join-Path $root "NoiseToggle\NoiseToggle.csproj"
 $installerProject = Join-Path $root "NoiseToggle.Installer\NoiseToggle.Installer.csproj"
 $appPublish = Join-Path $root "publish\app-$Runtime"
 $installerPayload = Join-Path $root "NoiseToggle.Installer\Payload\NoiseTogglePayload.zip"
+$installerPayloadDirectory = Split-Path -Parent $installerPayload
 $installerPublish = Join-Path $root "publish\installer-$Runtime"
 $setupOut = Join-Path $root "publish\NoiseToggleSetup.exe"
 
@@ -26,6 +27,10 @@ dotnet publish $appProject `
 
 if (Test-Path -LiteralPath $installerPayload) {
     Remove-Item -LiteralPath $installerPayload -Force
+}
+
+if (-not (Test-Path -LiteralPath $installerPayloadDirectory)) {
+    New-Item -ItemType Directory -Path $installerPayloadDirectory | Out-Null
 }
 
 Compress-Archive -Path (Join-Path $appPublish "*") -DestinationPath $installerPayload -Force

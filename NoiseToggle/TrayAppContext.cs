@@ -12,10 +12,14 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _toggleItem;
     private readonly ToolStripMenuItem _startupItem;
+    private readonly ToolStripMenuItem _waveLinkStatusItem;
+    private readonly WaveLinkHudForm _waveLinkHud;
     private readonly System.Windows.Forms.Timer _gameMonitorTimer = new();
+    private WaveLinkController? _waveLinkController;
     private string? _activeGameProcess;
     private AudioStateSnapshot? _preGameState;
     private bool _busy;
+    private bool _shuttingDown;
 
     public TrayAppContext()
     {
@@ -29,18 +33,22 @@ internal sealed class TrayAppContext : ApplicationContext
         _discord = new DiscordBridgeClient(_settings);
         _broadcast = new BroadcastController(_settings);
         TryInstallBridgeOnStartup();
+        _waveLinkHud = new WaveLinkHudForm(_settings.WaveLink);
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _toggleItem = new ToolStripMenuItem("Toggle now", null, async (_, _) => await ToggleAsync());
+        _waveLinkStatusItem = new ToolStripMenuItem("Wave Link wheel: starting...") { Enabled = false };
         _startupItem = new ToolStripMenuItem("Start with Windows", null, (_, _) => ToggleStartup())
         {
             Checked = _settings.StartWithWindows
         };
 
-        var menu = new ContextMenuStrip();
+        var menu = new ModernContextMenuStrip();
         menu.Items.Add(_statusItem);
+        menu.Items.Add(_waveLinkStatusItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_toggleItem);
+        menu.Items.Add(new ToolStripMenuItem("Show Wave Link HUD", null, (_, _) => _waveLinkHud.ShowHud(5000)));
         menu.Items.Add(new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings()));
         menu.Items.Add(_startupItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -58,6 +66,9 @@ internal sealed class TrayAppContext : ApplicationContext
             Visible = true
         };
         _trayIcon.DoubleClick += (_, _) => ShowSettings();
+
+        _waveLinkHud.Show();
+        _ = RestartWaveLinkControllerAsync();
 
         _hotkey.Pressed += async (_, _) => await ToggleAsync();
         _gameMonitorTimer.Interval = 5000;
@@ -395,7 +406,7 @@ internal sealed class TrayAppContext : ApplicationContext
         }
     }
 
-    private void ShowSettings()
+    private async void ShowSettings()
     {
         using var form = new SettingsForm(_settings);
         if (form.ShowDialog() != DialogResult.OK)
@@ -409,6 +420,8 @@ internal sealed class TrayAppContext : ApplicationContext
             StartupManager.SetEnabled(_settings.StartWithWindows);
             _startupItem.Checked = _settings.StartWithWindows;
             _activeGameProcess = FindActiveGameRule()?.ProcessName;
+            _waveLinkHud.ApplySettings();
+            await RestartWaveLinkControllerAsync();
             UpdateStatus($"Mode: {_settings.LastMode} ({_settings.Hotkey})");
             ShowBalloon("NoiseToggle", "Settings saved.");
         }
@@ -416,6 +429,37 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             ShowBalloon("NoiseToggle settings error", ex.Message, ToolTipIcon.Error);
         }
+    }
+
+    private async Task RestartWaveLinkControllerAsync()
+    {
+        var previous = _waveLinkController;
+        _waveLinkController = null;
+        if (previous is not null)
+            await previous.DisposeAsync();
+
+        _settings.WaveLink.Normalize();
+        _waveLinkHud.ApplySettings();
+        if (!_settings.WaveLink.Enabled)
+        {
+            UpdateWaveLinkStatus("Wave Link wheel: disabled");
+            return;
+        }
+
+        var controller = new WaveLinkController(_settings.WaveLink, _waveLinkHud);
+        controller.StatusChanged += UpdateWaveLinkStatus;
+        _waveLinkController = controller;
+        await controller.StartAsync();
+    }
+
+    private void UpdateWaveLinkStatus(string text)
+    {
+        if (_waveLinkHud.InvokeRequired)
+        {
+            _waveLinkHud.BeginInvoke(() => UpdateWaveLinkStatus(text));
+            return;
+        }
+        _waveLinkStatusItem.Text = text;
     }
 
     private void ToggleStartup()
@@ -502,11 +546,17 @@ internal sealed class TrayAppContext : ApplicationContext
         _trayIcon.ShowBalloonTip(3000);
     }
 
-    protected override void ExitThreadCore()
+    protected override async void ExitThreadCore()
     {
+        if (_shuttingDown)
+            return;
+        _shuttingDown = true;
         _hotkey.Dispose();
         _gameMonitorTimer.Stop();
         _gameMonitorTimer.Dispose();
+        if (_waveLinkController is not null)
+            await _waveLinkController.DisposeAsync();
+        _waveLinkHud.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         base.ExitThreadCore();

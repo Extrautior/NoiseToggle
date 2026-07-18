@@ -11,17 +11,24 @@ NoiseToggle is a lightweight Windows tray app for switching microphone noise sup
 - NVIDIA Broadcast bridge installer and restore action from the tray menu
 - Per-game auto switching with installed-game scan and running-process picker
 - Exact pre-game Broadcast and Krisp state restoration when the game exits
+- Integrated AJAZZ/media-wheel control for active Wave Link channels with a topmost translucent HUD
+- Wave Link wheel, display, opacity, volume-step, active-channel, and HUD timing settings in the main control panel
+- Optional focused-app follow mode resolves real Windows audio sessions (including child processes), selects focus at the start of each wheel-use burst, and preserves manual channel browsing
+- Windows 11-style dark settings interface with sidebar navigation and animated controls
+- Dark Windows 11 tray menu and a refreshed multi-resolution audio-toggle app icon
 - Settings stored in `%APPDATA%\NoiseToggle\settings.json`
 
 ## Current compatibility
 
-NoiseToggle v0.1.7 was verified on June 28, 2026 with:
+NoiseToggle v0.1.12 was built and verified on July 18, 2026. Its microphone-control bridges remain compatible with the versions verified for v0.1.7:
 
 - NVIDIA Broadcast `2.2.0.10298`
 - Discord Stable `1.0.9241`
 - Vencord patcher commit `e8415d7`
 
 The bridge protocols use an authenticated random token, bind only to `127.0.0.1`, and verify the live effect state after every change.
+
+Wave Link wheel control requires Elgato Wave Link to be running locally with a `Personal Mix`. It communicates only with Wave Link's local service and can be disabled independently in NoiseToggle settings.
 
 The Broadcast bridge sends NVIDIA's scalar effect strength instead of feeding
 the full settings object back into the gateway. It rejects malformed or
