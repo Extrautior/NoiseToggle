@@ -41,14 +41,36 @@ internal sealed class WaveLinkController : IAsyncDisposable
 
     public event Action<string>? StatusChanged;
 
+    public bool IsReady { get; private set; }
+
     public async Task StartAsync()
     {
+        IsReady = false;
         Render("Connecting to Wave Link…");
         StatusChanged?.Invoke("Wave Link: connecting...");
         try
         {
-            _waveLink = new WaveLinkClient(_settings.Host, _settings.Port);
-            await _waveLink.ConnectAsync(_lifetime.Token);
+            Exception? connectionError = null;
+            foreach (var port in WaveLinkPortDiscovery.GetCandidatePorts(_settings.Port))
+            {
+                var candidate = new WaveLinkClient(_settings.Host, port);
+                try
+                {
+                    await candidate.ConnectAsync(_lifetime.Token);
+                    _waveLink = candidate;
+                    if (port != _settings.Port)
+                        AppLog.Info($"Wave Link discovered websocket port {port} (configured fallback: {_settings.Port}).");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    connectionError = ex;
+                    await candidate.DisposeAsync();
+                }
+            }
+            if (_waveLink is null)
+                throw connectionError ?? new InvalidOperationException("Wave Link websocket endpoint was not found.");
+
             var state = await _waveLink.GetStateAsync(_lifetime.Token);
             _mix = state.Mixes.FirstOrDefault(item =>
                 string.Equals(item.Name, _settings.Mix, StringComparison.OrdinalIgnoreCase));
@@ -84,12 +106,14 @@ internal sealed class WaveLinkController : IAsyncDisposable
                 _actions.Writer.TryWrite(action);
             };
             _hook.Install();
+            IsReady = true;
             Render();
             StatusChanged?.Invoke("Wave Link wheel: ready");
             AppLog.Info($"Wave Link wheel connected to {_settings.Mix} with {_allChannels.Count} channels.");
         }
         catch (Exception ex)
         {
+            IsReady = false;
             Render(ex.Message);
             _hud.ShowHud(5000);
             StatusChanged?.Invoke("Wave Link wheel: unavailable");
@@ -204,6 +228,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            IsReady = false;
             Render(ex.Message);
             StatusChanged?.Invoke("Wave Link wheel: error");
             AppLog.Error("Wave Link wheel action failed.", ex);
@@ -395,6 +420,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        IsReady = false;
         _lifetime.Cancel();
         _actions.Writer.TryComplete();
         _hook?.Dispose();

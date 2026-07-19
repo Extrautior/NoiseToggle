@@ -15,11 +15,13 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly ToolStripMenuItem _waveLinkStatusItem;
     private readonly WaveLinkHudForm _waveLinkHud;
     private readonly System.Windows.Forms.Timer _gameMonitorTimer = new();
+    private readonly System.Windows.Forms.Timer _waveLinkRetryTimer = new() { Interval = 5000 };
     private WaveLinkController? _waveLinkController;
     private string? _activeGameProcess;
     private AudioStateSnapshot? _preGameState;
     private bool _busy;
     private bool _shuttingDown;
+    private bool _waveLinkRestarting;
 
     public TrayAppContext()
     {
@@ -74,6 +76,8 @@ internal sealed class TrayAppContext : ApplicationContext
         _gameMonitorTimer.Interval = 5000;
         _gameMonitorTimer.Tick += async (_, _) => await CheckGameMonitorAsync();
         _gameMonitorTimer.Start();
+        _waveLinkRetryTimer.Tick += async (_, _) => await RetryWaveLinkIfNeededAsync();
+        _waveLinkRetryTimer.Start();
 
         RegisterHotkey();
         UpdateStatus($"Mode: {_settings.LastMode} ({_settings.Hotkey})");
@@ -433,23 +437,45 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private async Task RestartWaveLinkControllerAsync()
     {
-        var previous = _waveLinkController;
-        _waveLinkController = null;
-        if (previous is not null)
-            await previous.DisposeAsync();
-
-        _settings.WaveLink.Normalize();
-        _waveLinkHud.ApplySettings();
-        if (!_settings.WaveLink.Enabled)
-        {
-            UpdateWaveLinkStatus("Wave Link wheel: disabled");
+        if (_waveLinkRestarting)
             return;
-        }
 
-        var controller = new WaveLinkController(_settings.WaveLink, _waveLinkHud);
-        controller.StatusChanged += UpdateWaveLinkStatus;
-        _waveLinkController = controller;
-        await controller.StartAsync();
+        _waveLinkRestarting = true;
+        try
+        {
+            var previous = _waveLinkController;
+            _waveLinkController = null;
+            if (previous is not null)
+                await previous.DisposeAsync();
+
+            _settings.WaveLink.Normalize();
+            _waveLinkHud.ApplySettings();
+            if (!_settings.WaveLink.Enabled)
+            {
+                UpdateWaveLinkStatus("Wave Link wheel: disabled");
+                return;
+            }
+
+            var controller = new WaveLinkController(_settings.WaveLink, _waveLinkHud);
+            controller.StatusChanged += UpdateWaveLinkStatus;
+            _waveLinkController = controller;
+            await controller.StartAsync();
+        }
+        finally
+        {
+            _waveLinkRestarting = false;
+        }
+    }
+
+    private async Task RetryWaveLinkIfNeededAsync()
+    {
+        if (_shuttingDown || _waveLinkRestarting || !_settings.WaveLink.Enabled ||
+            _waveLinkController?.IsReady != false)
+            return;
+
+        UpdateWaveLinkStatus("Wave Link wheel: retrying...");
+        AppLog.Info("Wave Link wheel retrying after startup or connection failure.");
+        await RestartWaveLinkControllerAsync();
     }
 
     private void UpdateWaveLinkStatus(string text)
@@ -554,6 +580,8 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkey.Dispose();
         _gameMonitorTimer.Stop();
         _gameMonitorTimer.Dispose();
+        _waveLinkRetryTimer.Stop();
+        _waveLinkRetryTimer.Dispose();
         if (_waveLinkController is not null)
             await _waveLinkController.DisposeAsync();
         _waveLinkHud.Dispose();

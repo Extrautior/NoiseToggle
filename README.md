@@ -20,7 +20,7 @@ NoiseToggle is a lightweight Windows tray app for switching microphone noise sup
 
 ## Current compatibility
 
-NoiseToggle v0.1.12 was built and verified on July 18, 2026. Its microphone-control bridges remain compatible with the versions verified for v0.1.7:
+NoiseToggle v0.1.13 was built and verified on July 19, 2026. Its microphone-control bridges remain compatible with the versions verified for v0.1.7:
 
 - NVIDIA Broadcast `2.2.0.10298`
 - Discord Stable `1.0.9241`
@@ -29,6 +29,7 @@ NoiseToggle v0.1.12 was built and verified on July 18, 2026. Its microphone-cont
 The bridge protocols use an authenticated random token, bind only to `127.0.0.1`, and verify the live effect state after every change.
 
 Wave Link wheel control requires Elgato Wave Link to be running locally with a `Personal Mix`. It communicates only with Wave Link's local service and can be disabled independently in NoiseToggle settings.
+NoiseToggle discovers Wave Link's dynamic local WebSocket port, retries the connection after startup, and reconnects automatically if Wave Link is restarted.
 
 The Broadcast bridge sends NVIDIA's scalar effect strength instead of feeding
 the full settings object back into the gateway. It rejects malformed or
