@@ -19,7 +19,7 @@ internal sealed class SettingsForm : Form
     private readonly ModernToggle _activeChannelsToggle = new();
     private readonly ModernToggle _showHudToggle = new();
     private readonly ModernNumberField _volumeStep = new(1, 25, 1);
-    private readonly ModernNumberField _hudMonitor = new(1, 16, 1);
+    private readonly ModernNumberField _hudMonitor = new(1, Math.Max(1, Screen.AllScreens.Length), 1);
     private readonly ModernNumberField _hudOpacity = new(65, 98, 1);
     private readonly ModernNumberField _hudHide = new(500, 10000, 100);
     private readonly ModernNumberField _activeHold = new(250, 30000, 250);
@@ -227,14 +227,15 @@ internal sealed class SettingsForm : Form
 
         var tuningCard = new SettingsCard { Location = new Point(28, 413), Size = new Size(714, 146) };
         _volumeStep.Value = _settings.WaveLink.StepPercent;
-        _hudMonitor.Value = _settings.WaveLink.HudMonitor;
+        var displayCount = Math.Max(1, Screen.AllScreens.Length);
+        _hudMonitor.Value = Math.Clamp(_settings.WaveLink.HudMonitor, 1, displayCount);
         _hudOpacity.Value = (int)Math.Round(_settings.WaveLink.HudOpacity * 100d);
         _hudHide.Value = _settings.WaveLink.HudAutoHideMilliseconds;
         _activeHold.Value = _settings.WaveLink.ActiveHoldMilliseconds;
         _showHudToggle.Checked = _settings.WaveLink.ShowHud;
 
         AddNumberSetting(tuningCard, "Volume step", "%", _volumeStep, 20, 20);
-        AddNumberSetting(tuningCard, "Display", "", _hudMonitor, 190, 20);
+        AddNumberSetting(tuningCard, $"Display (1–{displayCount})", "", _hudMonitor, 190, 20);
         AddNumberSetting(tuningCard, "Opacity", "%", _hudOpacity, 340, 20);
         AddNumberSetting(tuningCard, "Hide after", "ms", _hudHide, 510, 20);
         AddNumberSetting(tuningCard, "Keep active", "ms", _activeHold, 20, 77);
@@ -334,7 +335,7 @@ internal sealed class SettingsForm : Form
         _settings.WaveLink.OnlyActiveChannels = _activeChannelsToggle.Checked;
         _settings.WaveLink.ShowHud = _showHudToggle.Checked;
         _settings.WaveLink.StepPercent = _volumeStep.Value;
-        _settings.WaveLink.HudMonitor = _hudMonitor.Value;
+        _settings.WaveLink.HudMonitor = Math.Clamp(_hudMonitor.Value, 1, Math.Max(1, Screen.AllScreens.Length));
         _settings.WaveLink.HudOpacity = _hudOpacity.Value / 100d;
         _settings.WaveLink.HudAutoHideMilliseconds = _hudHide.Value;
         _settings.WaveLink.ActiveHoldMilliseconds = _activeHold.Value;
