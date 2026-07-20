@@ -248,11 +248,11 @@ internal sealed class WaveLinkHudForm : Form
 
     private void PositionAtBottomRight()
     {
-        var desired = $"DISPLAY{_settings.HudMonitor}";
-        var screen = Screen.AllScreens.FirstOrDefault(item => item.DeviceName.EndsWith(desired, StringComparison.OrdinalIgnoreCase))
-                     ?? Screen.AllScreens.FirstOrDefault(item => !item.Primary)
-                     ?? Screen.PrimaryScreen
-                     ?? Screen.AllScreens[0];
+        var screens = Screen.AllScreens;
+        var requestedIndex = _settings.HudMonitor - 1;
+        var screen = requestedIndex >= 0 && requestedIndex < screens.Length
+            ? screens[requestedIndex]
+            : Screen.PrimaryScreen ?? screens[0];
         var area = screen.WorkingArea;
         _restingLocation = new Point(area.Right - Width - 28, area.Bottom - Height - 28);
         if (!Visible || !_animationTimer.Enabled)

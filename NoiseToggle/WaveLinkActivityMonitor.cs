@@ -9,11 +9,13 @@ internal sealed record WaveActivitySnapshot(
 
 internal sealed class WaveLinkActivityMonitor : IAsyncDisposable
 {
-    private readonly HashSet<string> _channelNames;
+    private readonly object _channelLock = new();
+    private HashSet<string> _channelNames;
     private readonly float _threshold;
     private readonly TimeSpan _holdTime;
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _worker;
+    private int _endpointRefreshRequested = 1;
 
     public event Action<WaveActivitySnapshot>? SnapshotUpdated;
 
@@ -25,6 +27,13 @@ internal sealed class WaveLinkActivityMonitor : IAsyncDisposable
     }
 
     public void Start() => _worker ??= Task.Run(() => RunAsync(_lifetime.Token));
+
+    public void UpdateChannels(IEnumerable<string> channelNames)
+    {
+        lock (_channelLock)
+            _channelNames = channelNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Interlocked.Exchange(ref _endpointRefreshRequested, 1);
+    }
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -40,7 +49,7 @@ internal sealed class WaveLinkActivityMonitor : IAsyncDisposable
             while (!cancellationToken.IsCancellationRequested)
             {
                 var now = DateTimeOffset.UtcNow;
-                if (now >= nextRefresh)
+                if (now >= nextRefresh || Interlocked.Exchange(ref _endpointRefreshRequested, 0) == 1)
                 {
                     DisposeEndpoints(endpoints);
                     endpoints = DiscoverEndpoints(enumerator);
@@ -89,10 +98,14 @@ internal sealed class WaveLinkActivityMonitor : IAsyncDisposable
 
     private List<(string Channel, MMDevice Device)> DiscoverEndpoints(MMDeviceEnumerator enumerator)
     {
+        HashSet<string> channelNames;
+        lock (_channelLock)
+            channelNames = new HashSet<string>(_channelNames, StringComparer.OrdinalIgnoreCase);
+
         var result = new List<(string Channel, MMDevice Device)>();
         foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
         {
-            var channel = _channelNames.FirstOrDefault(name => Matches(device.FriendlyName, name));
+            var channel = channelNames.FirstOrDefault(name => Matches(device.FriendlyName, name));
             if (channel is null)
             {
                 device.Dispose();

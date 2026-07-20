@@ -16,6 +16,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
     private WaveLinkClient? _waveLink;
     private WaveLinkActivityMonitor? _activityMonitor;
     private MediaWheelHook? _hook;
+    private Task? _stateRefreshWorker;
     private List<WaveChannel> _allChannels = [];
     private List<WaveChannel> _channels = [];
     private WaveActivitySnapshot _activity = new(
@@ -107,6 +108,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
             };
             _hook.Install();
             IsReady = true;
+            _stateRefreshWorker = RefreshStateLoopAsync();
             Render();
             StatusChanged?.Invoke("Wave Link wheel: ready");
             AppLog.Info($"Wave Link wheel connected to {_settings.Mix} with {_allChannels.Count} channels.");
@@ -244,6 +246,89 @@ internal sealed class WaveLinkController : IAsyncDisposable
         }
         Render();
     }
+
+    private async Task RefreshStateLoopAsync()
+    {
+        try
+        {
+            while (!_lifetime.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), _lifetime.Token);
+                var waveLink = _waveLink;
+                if (waveLink is null)
+                    continue;
+
+                var state = await waveLink.GetStateAsync(_lifetime.Token);
+                ApplyStateRefresh(state);
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            IsReady = false;
+            StatusChanged?.Invoke("Wave Link wheel: reconnecting...");
+            AppLog.Error("Wave Link state refresh failed; the connection will be restarted.", ex);
+        }
+    }
+
+    private void ApplyStateRefresh(WaveLinkState state)
+    {
+        var refreshedMix = state.Mixes.FirstOrDefault(item =>
+            string.Equals(item.Name, _settings.Mix, StringComparison.OrdinalIgnoreCase));
+        if (refreshedMix is null)
+            throw new InvalidOperationException($"Wave Link mix '{_settings.Mix}' was not found during refresh.");
+
+        var refreshedChannels = ResolveConfiguredChannels(state.Channels);
+        if (refreshedChannels.Count == 0)
+            return;
+
+        bool changed;
+        lock (_stateLock)
+        {
+            var currentId = _channels.Count > 0 && _selected < _channels.Count
+                ? _channels[_selected].Id
+                : null;
+            changed = !_allChannels.Select(ChannelIdentity).SequenceEqual(
+                refreshedChannels.Select(ChannelIdentity), StringComparer.OrdinalIgnoreCase);
+
+            _mix = refreshedMix;
+            _allChannels = refreshedChannels;
+            if (_settings.OnlyActiveChannels)
+            {
+                ApplyActiveFilterLocked();
+            }
+            else
+            {
+                _channels = [.. _allChannels];
+                var preserved = currentId is null
+                    ? -1
+                    : _channels.FindIndex(channel => channel.Id == currentId);
+                _selected = preserved >= 0 ? preserved : 0;
+            }
+        }
+
+        _activityMonitor?.UpdateChannels(refreshedChannels.Select(channel => channel.Name));
+        if (changed)
+            AppLog.Info($"Wave Link channel list refreshed: {refreshedChannels.Count} channels.");
+        Render();
+    }
+
+    private List<WaveChannel> ResolveConfiguredChannels(IEnumerable<WaveChannel> channels)
+    {
+        var available = channels.ToList();
+        return _settings.Channels.Count == 0
+            ? available
+            : _settings.Channels
+                .Select(name => available.FirstOrDefault(channel =>
+                    string.Equals(channel.Name, name, StringComparison.OrdinalIgnoreCase)))
+                .Where(channel => channel is not null)
+                .Cast<WaveChannel>()
+                .ToList();
+    }
+
+    private static string ChannelIdentity(WaveChannel channel) => $"{channel.Id}\n{channel.Name}";
 
     private void ApplyActiveFilterLocked()
     {
@@ -425,6 +510,10 @@ internal sealed class WaveLinkController : IAsyncDisposable
         _actions.Writer.TryComplete();
         _hook?.Dispose();
         try { await _actionWorker; } catch { }
+        if (_stateRefreshWorker is not null)
+        {
+            try { await _stateRefreshWorker; } catch { }
+        }
         if (_activityMonitor is not null)
             await _activityMonitor.DisposeAsync();
         if (_waveLink is not null)
