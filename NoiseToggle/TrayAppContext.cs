@@ -514,7 +514,7 @@ internal sealed class TrayAppContext : ApplicationContext
         try
         {
             BroadcastBridgeInstaller.Install();
-            ShowBalloon("NoiseToggle", "NVIDIA Broadcast bridge installer started. Accept the UAC prompt.");
+            ShowBalloon("NoiseToggle", "Native NVIDIA Broadcast bridge installer started. Accept the UAC prompt.");
         }
         catch (Exception ex)
         {
@@ -527,7 +527,7 @@ internal sealed class TrayAppContext : ApplicationContext
         try
         {
             BroadcastBridgeInstaller.Restore();
-            ShowBalloon("NoiseToggle", "NVIDIA Broadcast restore started. Accept the UAC prompt.");
+            ShowBalloon("NoiseToggle", "Native NVIDIA Broadcast restore started. Accept the UAC prompt.");
         }
         catch (Exception ex)
         {
