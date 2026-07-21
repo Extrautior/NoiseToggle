@@ -1,42 +1,3 @@
-const fs = require("fs");
-const path = require("path");
-
-const root = process.env.NOISETOGGLE_BROADCAST_APP_DIR
-    ? path.resolve(process.env.NOISETOGGLE_BROADCAST_APP_DIR)
-    : fs.existsSync(path.resolve("app"))
-        ? path.resolve("app")
-        : path.resolve("broadcast_patch/app");
-const mainPath = path.join(root, "build/electron/main.js");
-const beginMarker = "/* NoiseToggle Broadcast Bridge BEGIN */";
-const endMarker = "/* NoiseToggle Broadcast Bridge END */";
-const legacyMarkers = [
-    "/* NoiseToggle Broadcast Bridge v4 */",
-    "/* NoiseToggle Broadcast Bridge v5 */"
-];
-
-function removeBridgeBlocks(source) {
-    let result = source;
-
-    while (result.includes(beginMarker)) {
-        const begin = result.indexOf(beginMarker);
-        const end = result.indexOf(endMarker, begin + beginMarker.length);
-        result = end >= 0
-            ? result.slice(0, begin) + result.slice(end + endMarker.length)
-            : result.slice(0, begin);
-    }
-
-    for (const marker of legacyMarkers) {
-        const index = result.indexOf(marker);
-        if (index >= 0) {
-            result = result.slice(0, index);
-        }
-    }
-
-    return result.trimEnd();
-}
-
-let main = removeBridgeBlocks(fs.readFileSync(mainPath, "utf8"));
-const bridge = String.raw`
 ;/* NoiseToggle Broadcast Bridge BEGIN */
 (function () {
     "use strict";
@@ -403,7 +364,3 @@ const bridge = String.raw`
     }
 })();
 /* NoiseToggle Broadcast Bridge END */
-`;
-
-fs.writeFileSync(mainPath, main + "\n" + bridge.trim() + "\n", "utf8");
-console.log("Installed NoiseToggle Broadcast bridge v7 in " + mainPath);

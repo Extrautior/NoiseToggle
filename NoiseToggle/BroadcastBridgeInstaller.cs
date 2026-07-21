@@ -4,40 +4,56 @@ namespace NoiseToggle;
 
 internal static class BroadcastBridgeInstaller
 {
+    public const string InstallArgument = "--install-broadcast-bridge";
+    public const string RestoreArgument = "--restore-broadcast-bridge";
+
     public static void Install()
     {
-        var appDir = AppContext.BaseDirectory;
-        var installerPath = Path.Combine(appDir, "install-nvidia-broadcast-bridge.ps1");
-        var patchPath = Path.Combine(appDir, "patch-broadcast-bridge.js");
-
-        if (!File.Exists(installerPath) || !File.Exists(patchPath))
-        {
-            throw new FileNotFoundException("The NVIDIA Broadcast bridge installer files are missing next to NoiseToggle.exe.");
-        }
-
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{installerPath}\"",
-            UseShellExecute = true,
-            Verb = "runas"
-        });
+        StartElevated(InstallArgument);
     }
 
     public static void Restore()
     {
-        var restorePath = Path.Combine(AppContext.BaseDirectory, "RESTORE-NVIDIA-BROADCAST.ps1");
-        if (!File.Exists(restorePath))
+        StartElevated(RestoreArgument);
+    }
+
+    public static bool TryParseMaintenanceAction(string argument, out BroadcastBridgeMaintenanceAction action)
+    {
+        if (string.Equals(argument, InstallArgument, StringComparison.OrdinalIgnoreCase))
         {
-            throw new FileNotFoundException("The NVIDIA Broadcast restore script is missing next to NoiseToggle.exe.");
+            action = BroadcastBridgeMaintenanceAction.Install;
+            return true;
         }
+
+        if (string.Equals(argument, RestoreArgument, StringComparison.OrdinalIgnoreCase))
+        {
+            action = BroadcastBridgeMaintenanceAction.Restore;
+            return true;
+        }
+
+        action = default;
+        return false;
+    }
+
+    private static void StartElevated(string argument)
+    {
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
+            throw new FileNotFoundException("NoiseToggle could not locate its own executable for the elevated bridge installer.");
 
         Process.Start(new ProcessStartInfo
         {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{restorePath}\"",
+            FileName = executable,
+            Arguments = argument,
+            WorkingDirectory = AppContext.BaseDirectory,
             UseShellExecute = true,
             Verb = "runas"
         });
     }
+}
+
+internal enum BroadcastBridgeMaintenanceAction
+{
+    Install,
+    Restore
 }

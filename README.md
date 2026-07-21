@@ -20,7 +20,7 @@ NoiseToggle is a lightweight Windows tray app for switching microphone noise sup
 
 ## Current compatibility
 
-NoiseToggle v0.1.15 was built and verified on July 20, 2026. Its microphone-control bridges remain compatible with the versions verified for v0.1.7:
+NoiseToggle v0.1.16 was built and verified on July 21, 2026. Its microphone-control bridges remain compatible with the versions verified for v0.1.7:
 
 - NVIDIA Broadcast `2.2.0.10298`
 - Discord Stable `1.0.9241`
@@ -72,13 +72,15 @@ NVIDIA Broadcast direct control requires patching the local NVIDIA Broadcast app
 Install NVIDIA Broadcast bridge
 ```
 
+The bridge installer is fully self-contained. It edits NVIDIA Broadcast's Electron archive natively in .NET and does not require Node.js, npm, PowerShell, or any downloaded tooling.
+
 This modifies only the local install. Before patching, NoiseToggle preserves a clean backup named for the installed Broadcast version, for example:
 
 ```text
 app.asar.noisetoggle-clean-2.2.0.10298
 ```
 
-The installer refuses to replace that backup with a different or already patched archive. To undo the patch, use:
+The native installer validates the NVIDIA version, archive layout, generated bridge block, and SHA-256 integrity metadata before replacing the live archive. It refuses to replace a clean backup with a different or already patched archive. To undo the patch, use:
 
 ```text
 Restore NVIDIA Broadcast backup
