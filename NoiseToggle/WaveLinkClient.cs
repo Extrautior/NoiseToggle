@@ -7,12 +7,13 @@ namespace NoiseToggle;
 
 internal sealed class WaveLinkClient : IAsyncDisposable
 {
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
     private readonly ClientWebSocket _socket = new();
     private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pending = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _receiver;
-    private int _mutationId = 100;
+    private int _requestId = 100;
 
     public WaveLinkClient(string host, int port)
     {
@@ -33,8 +34,8 @@ internal sealed class WaveLinkClient : IAsyncDisposable
 
     public async Task<WaveLinkState> GetStateAsync(CancellationToken cancellationToken)
     {
-        var channelsResult = await RequestAsync(3, "getChannels", null, cancellationToken);
-        var mixesResult = await RequestAsync(4, "getMixes", null, cancellationToken);
+        var channelsResult = await RequestAsync("getChannels", null, cancellationToken);
+        var mixesResult = await RequestAsync("getMixes", null, cancellationToken);
         var channels = ExtractCollection(ExtractResult(channelsResult), "channels")
             .Deserialize<List<WaveChannel>>(JsonOptions) ?? [];
         var mixes = ExtractCollection(ExtractResult(mixesResult), "mixes")
@@ -45,18 +46,20 @@ internal sealed class WaveLinkClient : IAsyncDisposable
     public async Task SetChannelMixLevelAsync(
         string channelId, string mixId, decimal level, CancellationToken cancellationToken)
     {
-        var id = Interlocked.Increment(ref _mutationId);
         var parameters = new
         {
             id = channelId,
             mixes = new[] { new { id = mixId, level = Math.Clamp(level, 0m, 1m) } }
         };
-        await RequestAsync(id, "setChannel", parameters, cancellationToken);
+        await RequestAsync("setChannel", parameters, cancellationToken);
     }
 
     private async Task<JsonElement> RequestAsync(
-        int id, string method, object? parameters, CancellationToken cancellationToken)
+        string method, object? parameters, CancellationToken cancellationToken)
     {
+        // Never reuse an id. A reply can arrive after a timed-out request; unique ids
+        // prevent that late reply from completing a newer request for the wrong data.
+        var id = Interlocked.Increment(ref _requestId);
         var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_pending.TryAdd(id, completion))
             throw new InvalidOperationException($"Wave Link request {id} is already pending.");
@@ -76,7 +79,16 @@ internal sealed class WaveLinkClient : IAsyncDisposable
                 _sendLock.Release();
             }
 
-            return await completion.Task.WaitAsync(TimeSpan.FromSeconds(4), cancellationToken);
+            try
+            {
+                return await completion.Task.WaitAsync(RequestTimeout, cancellationToken);
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    $"Wave Link request '{method}' did not reply within {RequestTimeout.TotalSeconds:0} seconds.",
+                    exception);
+            }
         }
         finally
         {
