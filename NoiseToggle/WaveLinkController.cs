@@ -6,6 +6,7 @@ namespace NoiseToggle;
 
 internal sealed class WaveLinkController : IAsyncDisposable
 {
+    private const int RefreshFailuresBeforeReconnect = 3;
     private readonly WaveLinkSettings _settings;
     private readonly WaveLinkHudForm _hud;
     private readonly CancellationTokenSource _lifetime = new();
@@ -51,6 +52,8 @@ internal sealed class WaveLinkController : IAsyncDisposable
         StatusChanged?.Invoke("Wave Link: connecting...");
         try
         {
+            InstallMediaWheelHook();
+
             Exception? connectionError = null;
             foreach (var port in WaveLinkPortDiscovery.GetCandidatePorts(_settings.Port))
             {
@@ -100,13 +103,6 @@ internal sealed class WaveLinkController : IAsyncDisposable
                 _activityMonitor.Start();
             }
 
-            _hook = new MediaWheelHook(_settings.CaptureWheel);
-            _hook.ActionReceived += action =>
-            {
-                _hud.ShowHud();
-                _actions.Writer.TryWrite(action);
-            };
-            _hook.Install();
             IsReady = true;
             _stateRefreshWorker = RefreshStateLoopAsync();
             Render();
@@ -116,11 +112,24 @@ internal sealed class WaveLinkController : IAsyncDisposable
         catch (Exception ex)
         {
             IsReady = false;
-            Render(ex.Message);
-            _hud.ShowHud(5000);
+            Render("Wave Link is temporarily unavailable");
             StatusChanged?.Invoke("Wave Link wheel: unavailable");
             AppLog.Error("Wave Link wheel failed to start.", ex);
         }
+    }
+
+    private void InstallMediaWheelHook()
+    {
+        if (_hook is not null)
+            return;
+
+        _hook = new MediaWheelHook(_settings.CaptureWheel);
+        _hook.ActionReceived += action =>
+        {
+            _hud.ShowHud();
+            _actions.Writer.TryWrite(action);
+        };
+        _hook.Install();
     }
 
     private async Task ProcessActionsAsync()
@@ -222,7 +231,17 @@ internal sealed class WaveLinkController : IAsyncDisposable
                 var next = Math.Clamp(channelMix.Level + direction * (_settings.StepPercent / 100m), 0m, 1m);
                 channelMix.Level = next;
                 Render();
-                await _waveLink.SetChannelMixLevelAsync(channel.Id, _mix.Id, next, _lifetime.Token);
+                try
+                {
+                    await _waveLink.SetChannelMixLevelAsync(channel.Id, _mix.Id, next, _lifetime.Token);
+                }
+                catch (TimeoutException ex)
+                {
+                    // Wave Link can briefly stop answering while it rebuilds audio
+                    // sessions. The setting is often already applied, so keep the
+                    // input worker alive and let the periodic refresh reconcile it.
+                    AppLog.Info($"Wave Link volume reply was delayed; keeping the connection alive. {ex.Message}");
+                }
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -249,6 +268,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
 
     private async Task RefreshStateLoopAsync()
     {
+        var consecutiveFailures = 0;
         try
         {
             while (!_lifetime.IsCancellationRequested)
@@ -258,8 +278,28 @@ internal sealed class WaveLinkController : IAsyncDisposable
                 if (waveLink is null)
                     continue;
 
-                var state = await waveLink.GetStateAsync(_lifetime.Token);
-                ApplyStateRefresh(state);
+                try
+                {
+                    var state = await waveLink.GetStateAsync(_lifetime.Token);
+                    ApplyStateRefresh(state);
+                    if (consecutiveFailures > 0)
+                        AppLog.Info($"Wave Link state refresh recovered after {consecutiveFailures} delayed request(s).");
+                    consecutiveFailures = 0;
+                }
+                catch (TimeoutException ex)
+                {
+                    consecutiveFailures++;
+                    if (consecutiveFailures < RefreshFailuresBeforeReconnect)
+                    {
+                        AppLog.Info(
+                            $"Wave Link state refresh was delayed ({consecutiveFailures}/{RefreshFailuresBeforeReconnect}); " +
+                            $"keeping the connection alive. {ex.Message}");
+                        continue;
+                    }
+
+                    throw new IOException(
+                        $"Wave Link did not answer {consecutiveFailures} consecutive state refreshes.", ex);
+                }
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)

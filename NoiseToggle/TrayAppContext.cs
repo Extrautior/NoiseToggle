@@ -22,6 +22,8 @@ internal sealed class TrayAppContext : ApplicationContext
     private bool _busy;
     private bool _shuttingDown;
     private bool _waveLinkRestarting;
+    private int _waveLinkRetryFailures;
+    private DateTimeOffset _nextWaveLinkRetry = DateTimeOffset.MinValue;
 
     public TrayAppContext()
     {
@@ -425,7 +427,7 @@ internal sealed class TrayAppContext : ApplicationContext
             _startupItem.Checked = _settings.StartWithWindows;
             _activeGameProcess = FindActiveGameRule()?.ProcessName;
             _waveLinkHud.ApplySettings();
-            await RestartWaveLinkControllerAsync();
+            await RestartWaveLinkControllerAsync(resetRetryBackoff: true);
             UpdateStatus($"Mode: {_settings.LastMode} ({_settings.Hotkey})");
             ShowBalloon("NoiseToggle", "Settings saved.");
         }
@@ -435,7 +437,7 @@ internal sealed class TrayAppContext : ApplicationContext
         }
     }
 
-    private async Task RestartWaveLinkControllerAsync()
+    private async Task RestartWaveLinkControllerAsync(bool resetRetryBackoff = false)
     {
         if (_waveLinkRestarting)
             return;
@@ -443,6 +445,12 @@ internal sealed class TrayAppContext : ApplicationContext
         _waveLinkRestarting = true;
         try
         {
+            if (resetRetryBackoff)
+            {
+                _waveLinkRetryFailures = 0;
+                _nextWaveLinkRetry = DateTimeOffset.MinValue;
+            }
+
             var previous = _waveLinkController;
             _waveLinkController = null;
             if (previous is not null)
@@ -460,6 +468,17 @@ internal sealed class TrayAppContext : ApplicationContext
             controller.StatusChanged += UpdateWaveLinkStatus;
             _waveLinkController = controller;
             await controller.StartAsync();
+            if (controller.IsReady)
+            {
+                if (_waveLinkRetryFailures > 0)
+                    AppLog.Info($"Wave Link wheel recovered after {_waveLinkRetryFailures} failed connection attempt(s).");
+                _waveLinkRetryFailures = 0;
+                _nextWaveLinkRetry = DateTimeOffset.MinValue;
+            }
+            else
+            {
+                ScheduleWaveLinkRetry();
+            }
         }
         finally
         {
@@ -473,9 +492,28 @@ internal sealed class TrayAppContext : ApplicationContext
             _waveLinkController?.IsReady != false)
             return;
 
-        UpdateWaveLinkStatus("Wave Link wheel: retrying...");
-        AppLog.Info("Wave Link wheel retrying after startup or connection failure.");
+        if (DateTimeOffset.UtcNow < _nextWaveLinkRetry)
+            return;
+
         await RestartWaveLinkControllerAsync();
+    }
+
+    private void ScheduleWaveLinkRetry()
+    {
+        _waveLinkRetryFailures++;
+        var delaySeconds = _waveLinkRetryFailures switch
+        {
+            1 => 5,
+            2 => 10,
+            3 => 20,
+            4 => 30,
+            _ => 60
+        };
+        _nextWaveLinkRetry = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
+        UpdateWaveLinkStatus($"Wave Link wheel: reconnecting in {delaySeconds}s");
+        AppLog.Info(
+            $"Wave Link wheel will retry quietly in {delaySeconds} seconds " +
+            $"(attempt {_waveLinkRetryFailures}).");
     }
 
     private void UpdateWaveLinkStatus(string text)
