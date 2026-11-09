@@ -13,7 +13,7 @@ NoiseToggle is a lightweight Windows tray app for switching microphone noise sup
 - Exact pre-game Broadcast and Krisp state restoration when the game exits
 - Integrated AJAZZ/media-wheel control for active Wave Link channels with a topmost translucent HUD
 - Wave Link wheel, display, opacity, volume-step, active-channel, and HUD timing settings in the main control panel
-- Optional focused-app follow mode resolves real Windows audio sessions (including child processes), selects focus at the start of each wheel-use burst, and preserves manual channel browsing
+- Optional focused-app follow mode prefers the focused app when its Windows audio session is producing audio, including audio from child processes. Otherwise it picks an active Wave Link channel
 - Windows 11-style dark settings interface with sidebar navigation and animated controls
 - Dark Windows 11 tray menu and a refreshed multi-resolution audio-toggle app icon
 - Settings stored in `%APPDATA%\NoiseToggle\settings.json`
@@ -27,6 +27,8 @@ NoiseToggle v0.1.17 was built and verified on August 12, 2026. Its microphone-co
 - Vencord patcher commit `e8415d7`
 
 The bridge protocols use an authenticated random token, bind only to `127.0.0.1`, and verify the live effect state after every change.
+
+The Corsair HS80 MAX USB receiver's volume wheel can control Wave Link. With **Capture media wheel** enabled, NoiseToggle restores the headset's Windows volume during wheel use. On Windows 11, NoiseToggle keeps the Explorer volume flyout transparent while headset wheel capture is active, so it cannot flash between turns. Turning capture off restores the flyout. Windows still applies the hardware step before NoiseToggle restores the level. To browse channels, press the keyboard's media mute key, turn the wheel, then press mute again to adjust the selected channel.
 
 Wave Link wheel control requires Elgato Wave Link to be running locally with a `Personal Mix`. It communicates only with Wave Link's local service and can be disabled independently in NoiseToggle settings.
 NoiseToggle discovers Wave Link's dynamic local WebSocket port, retries the connection after startup, and reconnects automatically if Wave Link is restarted.

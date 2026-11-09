@@ -60,7 +60,7 @@ internal sealed class WaveLinkActivityMonitor : IAsyncDisposable
                 if (now >= nextSessionRefresh)
                 {
                     processChannels = DiscoverProcessChannels(endpoints);
-                    nextSessionRefresh = now.AddSeconds(1);
+                    nextSessionRefresh = now.AddMilliseconds(250);
                 }
 
                 var peaks = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
@@ -121,7 +121,7 @@ internal sealed class WaveLinkActivityMonitor : IAsyncDisposable
         endpointName.StartsWith(channelName + " (", StringComparison.OrdinalIgnoreCase) ||
         endpointName.StartsWith(channelName + " - ", StringComparison.OrdinalIgnoreCase);
 
-    private static IReadOnlyDictionary<int, IReadOnlySet<string>> DiscoverProcessChannels(
+    private IReadOnlyDictionary<int, IReadOnlySet<string>> DiscoverProcessChannels(
         IEnumerable<(string Channel, MMDevice Device)> endpoints)
     {
         var result = new Dictionary<int, HashSet<string>>();
@@ -133,7 +133,11 @@ internal sealed class WaveLinkActivityMonitor : IAsyncDisposable
                 manager.RefreshSessions();
                 for (var index = 0; index < manager.Sessions.Count; index++)
                 {
-                    var processId = manager.Sessions[index].GetProcessID;
+                    using var session = manager.Sessions[index];
+                    if (session.AudioMeterInformation.MasterPeakValue < _threshold)
+                        continue;
+
+                    var processId = session.GetProcessID;
                     if (processId == 0 || processId > int.MaxValue)
                         continue;
                     if (!result.TryGetValue((int)processId, out var channels))
