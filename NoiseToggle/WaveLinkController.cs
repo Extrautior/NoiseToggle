@@ -1,5 +1,4 @@
 using System.Threading.Channels;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace NoiseToggle;
@@ -17,6 +16,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
     private WaveLinkClient? _waveLink;
     private WaveLinkActivityMonitor? _activityMonitor;
     private MediaWheelHook? _hook;
+    private Hs80MaxWheel? _headsetWheel;
     private Task? _stateRefreshWorker;
     private List<WaveChannel> _allChannels = [];
     private List<WaveChannel> _channels = [];
@@ -93,7 +93,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
                 throw new InvalidOperationException("None of the configured Wave Link channels exist.");
 
             _channels = _settings.OnlyActiveChannels ? [] : [.. _allChannels];
-            if (_settings.OnlyActiveChannels)
+            if (_settings.OnlyActiveChannels || _settings.SelectForegroundOnPress)
             {
                 _activityMonitor = new WaveLinkActivityMonitor(
                     _allChannels.Select(item => item.Name),
@@ -104,6 +104,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
             }
 
             IsReady = true;
+            _headsetWheel?.UpdateFlyout();
             _stateRefreshWorker = RefreshStateLoopAsync();
             Render();
             StatusChanged?.Invoke("Wave Link wheel: ready");
@@ -124,12 +125,25 @@ internal sealed class WaveLinkController : IAsyncDisposable
             return;
 
         _hook = new MediaWheelHook(_settings.CaptureWheel);
-        _hook.ActionReceived += action =>
-        {
-            _hud.ShowHud();
-            _actions.Writer.TryWrite(action);
-        };
+        _hook.ActionReceived += QueueWheelAction;
         _hook.Install();
+        try
+        {
+            _headsetWheel = new Hs80MaxWheel(QueueWheelAction, () => IsReady && _settings.CaptureWheel);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Could not register the HS80 MAX wheel.", ex);
+        }
+    }
+
+    private void QueueWheelAction(MediaWheelAction action)
+    {
+        if (!IsReady)
+            return;
+
+        _hud.ShowHud();
+        _actions.Writer.TryWrite(action);
     }
 
     private async Task ProcessActionsAsync()
@@ -198,7 +212,8 @@ internal sealed class WaveLinkController : IAsyncDisposable
                     lock (_stateLock)
                     {
                         ApplyActiveFilterLocked();
-                        if (_followForeground || foregroundProcessId != _automaticProcessId)
+                        if (_followForeground || foregroundProcessId != _automaticProcessId ||
+                            _channels.Count == 0 || !_activity.ActiveNames.Contains(_channels[_selected].Name))
                             SelectForegroundChannelLocked(foregroundProcessId);
                         // Keep this channel stable for the rest of the interaction. After
                         // inactivity—or a real focus change—the next turn resolves it again.
@@ -221,7 +236,12 @@ internal sealed class WaveLinkController : IAsyncDisposable
                 }
 
                 lock (_stateLock)
+                {
                     channel = _channels.Count > 0 ? _channels[_selected] : null;
+                    if (_settings.SelectForegroundOnPress && !_manualMode &&
+                        channel is not null && !_activity.ActiveNames.Contains(channel.Name))
+                        channel = null;
+                }
                 if (channel is null)
                     continue;
                 var channelMix = channel.Mixes.FirstOrDefault(item => item.Id == _mix.Id);
@@ -376,7 +396,8 @@ internal sealed class WaveLinkController : IAsyncDisposable
             return;
         var current = _channels.Count > 0 && _selected < _channels.Count ? _channels[_selected] : null;
         var filtered = _allChannels.Where(channel => _activity.ActiveNames.Contains(channel.Name)).ToList();
-        if (_adjusting && current is not null && filtered.All(item => item.Id != current.Id))
+        if (_adjusting && (!_settings.SelectForegroundOnPress || _manualMode) &&
+            current is not null && filtered.All(item => item.Id != current.Id))
             filtered.Insert(0, current);
         _channels = filtered;
         if (current is null || _channels.Count == 0)
@@ -399,67 +420,24 @@ internal sealed class WaveLinkController : IAsyncDisposable
 
     private void SelectForegroundChannelLocked(uint processId)
     {
-        if (processId == 0)
+        var active = _channels.Where(channel => _activity.ActiveNames.Contains(channel.Name)).ToList();
+        if (active.Count == 0)
             return;
 
-        string processName;
-        string windowTitle;
-        try
-        {
-            using var process = Process.GetProcessById((int)processId);
-            processName = process.ProcessName;
-            windowTitle = process.MainWindowTitle;
-        }
-        catch
-        {
-            return;
-        }
-
-        var relatedProcesses = GetProcessTree(processId);
-        var sessionChannelNames = relatedProcesses
-            .SelectMany(id => _activity.ProcessChannels.TryGetValue(id, out var names)
-                ? names.AsEnumerable()
-                : Enumerable.Empty<string>())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        var relatedProcesses = active.Count > 1 && processId != 0 ? GetProcessTree(processId) : [];
+        var sessionChannels = relatedProcesses
+            .Where(_activity.ProcessChannels.ContainsKey)
+            .SelectMany(id => _activity.ProcessChannels[id])
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var sessionMatch = _allChannels
-            .Where(channel => sessionChannelNames.Contains(channel.Name))
-            .OrderByDescending(channel => _activity.ActiveNames.Contains(channel.Name))
+        var selected = active
+            .OrderByDescending(channel => sessionChannels.Contains(channel.Name))
             .ThenByDescending(channel => _activity.Peaks.GetValueOrDefault(channel.Name))
-            .FirstOrDefault();
-        if (sessionMatch is not null)
-        {
-            SelectChannelLocked(sessionMatch, $"audio session for {processName}");
-            return;
-        }
-
-        var processKey = NormalizeAppName(processName);
-        var titleKey = NormalizeAppName(windowTitle);
-        var best = _allChannels
-            .Select(channel => (Channel: channel, Score: ForegroundMatchScore(channel.Name, processKey, titleKey)))
-            .Where(item => item.Score > 0)
-            .OrderByDescending(item => item.Score)
-            .ThenByDescending(item => _activity.Peaks.GetValueOrDefault(item.Channel.Name))
-            .FirstOrDefault();
-        if (best.Channel is null)
-            return;
-
-        SelectChannelLocked(best.Channel, $"name match for {processName}");
-    }
-
-    private void SelectChannelLocked(WaveChannel selected, string reason)
-    {
-        var previous = _channels.Count > 0 ? _channels[_selected] : null;
-        var index = _channels.FindIndex(channel => channel.Id == selected.Id);
-        if (index < 0)
-        {
-            _channels.Insert(0, selected);
-            index = 0;
-        }
+            .First();
+        var index = _channels.IndexOf(selected);
+        if (_selected != index || _followForeground)
+            AppLog.Info($"Wave Link automatic selection: {selected.Name}.");
         _selected = index;
-        if (previous?.Id != selected.Id)
-            AppLog.Info($"Wave Link focused selection: {selected.Name} ({reason}).");
     }
 
     private static HashSet<int> GetProcessTree(uint rootProcessId)
@@ -500,25 +478,6 @@ internal sealed class WaveLinkController : IAsyncDisposable
         return result;
     }
 
-    private static int ForegroundMatchScore(string channelName, string processKey, string titleKey)
-    {
-        var channelKey = NormalizeAppName(channelName);
-        if (channelKey.Length == 0)
-            return 0;
-        if (channelKey.Equals(processKey, StringComparison.OrdinalIgnoreCase))
-            return 100;
-        if (processKey.Length >= 4 &&
-            (channelKey.Contains(processKey, StringComparison.OrdinalIgnoreCase) ||
-             processKey.Contains(channelKey, StringComparison.OrdinalIgnoreCase)))
-            return 80;
-        if (channelKey.Length >= 4 && titleKey.Contains(channelKey, StringComparison.OrdinalIgnoreCase))
-            return 60;
-        return 0;
-    }
-
-    private static string NormalizeAppName(string value) =>
-        new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
-
     private void Render(string? status = null)
     {
         WaveChannel? channel;
@@ -549,6 +508,7 @@ internal sealed class WaveLinkController : IAsyncDisposable
         _lifetime.Cancel();
         _actions.Writer.TryComplete();
         _hook?.Dispose();
+        _headsetWheel?.Dispose();
         try { await _actionWorker; } catch { }
         if (_stateRefreshWorker is not null)
         {
