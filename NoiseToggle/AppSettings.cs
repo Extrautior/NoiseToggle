@@ -15,6 +15,7 @@ internal sealed class AppSettings
     public string BridgeToken { get; set; } = Guid.NewGuid().ToString("N");
     public int BridgePort { get; set; } = 28473;
     public int BroadcastBridgePort { get; set; } = 28474;
+    public bool UseIcueBroadcast { get; set; }
     public ToggleMode LastMode { get; set; } = ToggleMode.Broadcast;
     public bool StartWithWindows { get; set; }
     public bool AutoSwitchForGames { get; set; }

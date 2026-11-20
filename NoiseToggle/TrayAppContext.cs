@@ -54,6 +54,18 @@ internal sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new ToolStripMenuItem("Show Wave Link HUD", null, (_, _) => _waveLinkHud.ShowHud(5000)));
         menu.Items.Add(new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings()));
+        var useIcue = new ToolStripMenuItem("Use iCUE for NVIDIA noise removal")
+        {
+            Checked = _settings.UseIcueBroadcast,
+            CheckOnClick = true
+        };
+        useIcue.CheckedChanged += (_, _) =>
+        {
+            _settings.UseIcueBroadcast = useIcue.Checked;
+            _settings.Save();
+        };
+        menu.Opening += (_, _) => useIcue.Enabled = !_busy && _activeGameProcess is null && _preGameState is null;
+        menu.Items.Add(useIcue);
         menu.Items.Add(_startupItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Install Discord/Vencord bridge", null, (_, _) => InstallDiscordBridge()));
@@ -88,7 +100,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private async Task ToggleAsync()
     {
         var nextMode = _settings.LastMode == ToggleMode.Broadcast ? ToggleMode.Krisp : ToggleMode.Broadcast;
-        await SwitchToModeAsync(nextMode, showBalloon: true);
+        await SwitchToModeAsync(nextMode, showBalloon: !_settings.UseIcueBroadcast);
     }
 
     private async Task SwitchToModeAsync(ToggleMode nextMode, bool showBalloon)
@@ -150,7 +162,10 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             AppLog.Error("Toggle failed.", ex);
             UpdateStatus($"Error: {ex.Message}");
-            ShowBalloon("NoiseToggle error", ex.Message, ToolTipIcon.Error);
+            if (showBalloon)
+            {
+                ShowBalloon("NoiseToggle error", ex.Message, ToolTipIcon.Error);
+            }
         }
         finally
         {
@@ -209,7 +224,7 @@ internal sealed class TrayAppContext : ApplicationContext
         var successes = 0;
         if (krisp)
         {
-            if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcastNoiseRemoval, token), failures, TimeSpan.FromSeconds(30)))
+            if (await TryRunStepAsync(_broadcast.DisplayName, token => _broadcast.SetNoiseRemovalAsync(broadcastNoiseRemoval, token), failures, TimeSpan.FromSeconds(30)))
             {
                 successes++;
             }
@@ -226,7 +241,7 @@ internal sealed class TrayAppContext : ApplicationContext
                 successes++;
             }
 
-            if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcastNoiseRemoval, token), failures, TimeSpan.FromSeconds(30)))
+            if (await TryRunStepAsync(_broadcast.DisplayName, token => _broadcast.SetNoiseRemovalAsync(broadcastNoiseRemoval, token), failures, TimeSpan.FromSeconds(30)))
             {
                 successes++;
             }
@@ -259,7 +274,10 @@ internal sealed class TrayAppContext : ApplicationContext
             if (failures.Count > 0)
             {
                 AppLog.Info($"Auto game monitor partial failure: {string.Join("; ", failures)}");
-                ShowBalloon("NoiseToggle game rule partial failure", string.Join(Environment.NewLine, failures), ToolTipIcon.Warning);
+                if (!_settings.UseIcueBroadcast)
+                {
+                    ShowBalloon("NoiseToggle game rule partial failure", string.Join(Environment.NewLine, failures), ToolTipIcon.Warning);
+                }
             }
         }
         catch (Exception ex)
@@ -327,14 +345,14 @@ internal sealed class TrayAppContext : ApplicationContext
 
             if (snapshot.BroadcastNoiseRemovalEnabled is bool broadcast)
             {
-                if (await TryRunStepAsync("NVIDIA Broadcast", token => _broadcast.SetNoiseRemovalAsync(broadcast, token), failures, TimeSpan.FromSeconds(30)))
+                if (await TryRunStepAsync(_broadcast.DisplayName, token => _broadcast.SetNoiseRemovalAsync(broadcast, token), failures, TimeSpan.FromSeconds(30)))
                 {
                     successes++;
                 }
             }
             else
             {
-                failures.Add("NVIDIA Broadcast: previous state was unknown");
+                failures.Add($"{_broadcast.DisplayName}: previous state was unknown");
             }
 
             if (snapshot.KrispEnabled is bool krisp)
@@ -358,7 +376,10 @@ internal sealed class TrayAppContext : ApplicationContext
             if (failures.Count > 0)
             {
                 AppLog.Info($"Auto game monitor restore partial failure: {string.Join("; ", failures)}");
-                ShowBalloon("NoiseToggle restore partial failure", string.Join(Environment.NewLine, failures), ToolTipIcon.Warning);
+                if (!_settings.UseIcueBroadcast)
+                {
+                    ShowBalloon("NoiseToggle restore partial failure", string.Join(Environment.NewLine, failures), ToolTipIcon.Warning);
+                }
             }
         }
         catch (Exception ex)
