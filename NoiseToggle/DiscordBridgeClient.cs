@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace NoiseToggle;
 
@@ -17,7 +18,7 @@ internal sealed class DiscordBridgeClient
         _settings = settings;
     }
 
-    public async Task<bool?> GetKrispStateAsync(CancellationToken cancellationToken)
+    public async Task<DiscordSuppressionMode> GetSuppressionModeAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -27,7 +28,13 @@ internal sealed class DiscordBridgeClient
 
             using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var payload = await JsonSerializer.DeserializeAsync<BridgeState>(stream, cancellationToken: cancellationToken);
-            return payload?.KrispEnabled;
+            return payload?.Mode switch
+            {
+                "none" => DiscordSuppressionMode.None,
+                "standard" => DiscordSuppressionMode.Standard,
+                "krisp" => DiscordSuppressionMode.Krisp,
+                _ => throw new InvalidOperationException("Discord did not report its noise suppression mode. Restart Discord to load the latest NoiseToggle bridge.")
+            };
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
@@ -35,19 +42,20 @@ internal sealed class DiscordBridgeClient
         }
     }
 
-    public async Task SetKrispStateAsync(bool enabled, CancellationToken cancellationToken)
+    public async Task SetSuppressionModeAsync(DiscordSuppressionMode mode, CancellationToken cancellationToken)
     {
         try
         {
-            using var request = CreateRequest(HttpMethod.Post, "/krisp");
-            request.Content = new StringContent(JsonSerializer.Serialize(new { enabled }), Encoding.UTF8, "application/json");
+            using var request = CreateRequest(HttpMethod.Post, "/suppression");
+            var requested = mode.ToString().ToLowerInvariant();
+            request.Content = new StringContent(JsonSerializer.Serialize(new { mode = requested }), Encoding.UTF8, "application/json");
             using var response = await _http.SendAsync(request, cancellationToken);
             await EnsureSuccessAsync(response, cancellationToken);
 
             for (var attempt = 0; attempt < 10; attempt++)
             {
-                var actual = await GetKrispStateAsync(cancellationToken);
-                if (actual == enabled)
+                var actual = await GetSuppressionModeAsync(cancellationToken);
+                if (actual == mode)
                 {
                     return;
                 }
@@ -56,7 +64,7 @@ internal sealed class DiscordBridgeClient
             }
 
             throw new InvalidOperationException(
-                $"Discord bridge accepted the request, but live Krisp state did not change to {(enabled ? "enabled" : "disabled")}.");
+                $"Discord bridge accepted the request, but live noise suppression did not change to {mode}.");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
@@ -113,6 +121,14 @@ internal sealed class DiscordBridgeClient
 
     private sealed class BridgeState
     {
-        public bool KrispEnabled { get; set; }
+        [JsonPropertyName("mode")]
+        public string? Mode { get; set; }
     }
+}
+
+internal enum DiscordSuppressionMode
+{
+    None,
+    Standard,
+    Krisp
 }

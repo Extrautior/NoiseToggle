@@ -229,14 +229,14 @@ internal sealed class TrayAppContext : ApplicationContext
                 successes++;
             }
 
-            if (await TryRunStepAsync("Discord Krisp", token => _discord.SetKrispStateAsync(true, token), failures, TimeSpan.FromSeconds(5)))
+            if (await TryRunStepAsync("Discord noise suppression", token => _discord.SetSuppressionModeAsync(DiscordSuppressionMode.Krisp, token), failures, TimeSpan.FromSeconds(5)))
             {
                 successes++;
             }
         }
         else
         {
-            if (await TryRunStepAsync("Discord Krisp", token => _discord.SetKrispStateAsync(false, token), failures, TimeSpan.FromSeconds(5)))
+            if (await TryRunStepAsync("Discord noise suppression", token => _discord.SetSuppressionModeAsync(DiscordSuppressionMode.None, token), failures, TimeSpan.FromSeconds(5)))
             {
                 successes++;
             }
@@ -294,7 +294,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private async Task<AudioStateSnapshot> CaptureCurrentAudioStateAsync()
     {
         bool? broadcast = null;
-        bool? krisp = null;
+        DiscordSuppressionMode? discordMode = null;
 
         try
         {
@@ -309,14 +309,14 @@ internal sealed class TrayAppContext : ApplicationContext
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
-            krisp = await _discord.GetKrispStateAsync(cts.Token);
+            discordMode = await _discord.GetSuppressionModeAsync(cts.Token);
         }
         catch (Exception ex)
         {
-            AppLog.Error("Could not capture pre-game Discord Krisp state.", ex);
+            AppLog.Error("Could not capture pre-game Discord noise suppression mode.", ex);
         }
 
-        return new AudioStateSnapshot(broadcast, krisp);
+        return new AudioStateSnapshot(broadcast, discordMode);
     }
 
     private async Task RestorePreGameStateAsync()
@@ -355,16 +355,16 @@ internal sealed class TrayAppContext : ApplicationContext
                 failures.Add($"{_broadcast.DisplayName}: previous state was unknown");
             }
 
-            if (snapshot.KrispEnabled is bool krisp)
+            if (snapshot.DiscordMode is DiscordSuppressionMode discordMode)
             {
-                if (await TryRunStepAsync("Discord Krisp", token => _discord.SetKrispStateAsync(krisp, token), failures, TimeSpan.FromSeconds(5)))
+                if (await TryRunStepAsync("Discord noise suppression", token => _discord.SetSuppressionModeAsync(discordMode, token), failures, TimeSpan.FromSeconds(5)))
                 {
                     successes++;
                 }
             }
             else
             {
-                failures.Add("Discord Krisp: previous state was unknown");
+                failures.Add("Discord noise suppression: previous mode was unknown");
             }
 
             if (successes > 0)
@@ -649,11 +649,11 @@ internal sealed class TrayAppContext : ApplicationContext
         base.ExitThreadCore();
     }
 
-    private sealed record AudioStateSnapshot(bool? BroadcastNoiseRemovalEnabled, bool? KrispEnabled)
+    private sealed record AudioStateSnapshot(bool? BroadcastNoiseRemovalEnabled, DiscordSuppressionMode? DiscordMode)
     {
         public override string ToString()
         {
-            return $"Broadcast={(BroadcastNoiseRemovalEnabled?.ToString() ?? "unknown")}, Krisp={(KrispEnabled?.ToString() ?? "unknown")}";
+            return $"Broadcast={(BroadcastNoiseRemovalEnabled?.ToString() ?? "unknown")}, Discord suppression={(DiscordMode?.ToString() ?? "unknown")}";
         }
     }
 }

@@ -2,6 +2,8 @@
 
 NoiseToggle is a lightweight Windows tray app for switching microphone noise suppression between NVIDIA Broadcast and Discord Krisp. It supports both the standalone NVIDIA Broadcast app and the NVIDIA Broadcast integration in Corsair iCUE.
 
+Broadcast mode selects **None** in Discord's Noise Suppression setting. Krisp mode selects **Krisp**. Game rules restore the Discord mode that was active before the game started, including **Standard**.
+
 ## Features
 
 - Tray app with manual toggle and mode status
