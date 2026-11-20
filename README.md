@@ -1,6 +1,6 @@
 # NoiseToggle
 
-NoiseToggle is a lightweight Windows tray app for switching microphone noise suppression between NVIDIA Broadcast and Discord Krisp.
+NoiseToggle is a lightweight Windows tray app for switching microphone noise suppression between NVIDIA Broadcast and Discord Krisp. It supports both the standalone NVIDIA Broadcast app and the NVIDIA Broadcast integration in Corsair iCUE.
 
 ## Features
 
@@ -20,7 +20,7 @@ NoiseToggle is a lightweight Windows tray app for switching microphone noise sup
 
 ## Current compatibility
 
-NoiseToggle v0.1.17 was built and verified on August 12, 2026. Its microphone-control bridges remain compatible with the versions verified for v0.1.7:
+NoiseToggle v0.1.19 adds Corsair iCUE support, tested on iCUE `5.52.93` with an HS80 MAX Wireless headset. The standalone microphone-control bridges were previously verified with:
 
 - NVIDIA Broadcast `2.2.0.10298`
 - Discord Stable `1.0.9241`
@@ -49,7 +49,7 @@ failure.
 
 ## Install
 
-Download `NoiseToggleSetup.exe` from the latest GitHub release and run it.
+Download `NoiseToggleSetup.exe` from the [latest GitHub release](https://github.com/Extrautior/NoiseToggle/releases/latest) and run it. Run the installer over an existing NoiseToggle installation to upgrade and retain your settings.
 
 The installer places the app under:
 
@@ -60,6 +60,19 @@ The installer places the app under:
 It also creates a Start Menu shortcut and starts the tray app after install.
 
 ## Bridge Notes
+
+### Corsair iCUE noise removal
+
+For a compatible Corsair headset, enable **Use iCUE for NVIDIA noise removal**
+in the NoiseToggle tray menu. Keep iCUE running and its SDK enabled. Select
+**Noise Removal** as the only NVIDIA Broadcast effect in iCUE. The hotkey and
+game rules use iCUE's local Automation SDK while iCUE is in the tray. NoiseToggle
+uses the tray status and log for switch results in this mode.
+
+Tested on iCUE 5.52.93 with one HS80 MAX Wireless headset. This option requires
+one NVIDIA Broadcast-compatible audio device and a matching Automation SDK
+interface. The standalone NVIDIA Broadcast bridge is only used when the iCUE
+option is off.
 
 Discord control requires BetterDiscord or Vencord patch support. If Discord or Vencord is reinstalled later, use the tray menu action:
 

@@ -11,6 +11,8 @@ namespace NoiseToggle;
 internal sealed class BroadcastController
 {
     private readonly BroadcastBridgeClient _bridge;
+    private readonly AppSettings _settings;
+    private readonly IcueNoiseRemovalClient _icue = new();
 
     private static readonly string BroadcastExe =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "NVIDIA Corporation", "NVIDIA Broadcast", "NVIDIA Broadcast.exe");
@@ -20,11 +22,20 @@ internal sealed class BroadcastController
 
     public BroadcastController(AppSettings settings)
     {
+        _settings = settings;
         _bridge = new BroadcastBridgeClient(settings);
     }
 
+    public string DisplayName => _settings.UseIcueBroadcast ? "iCUE Noise Removal" : "NVIDIA Broadcast";
+
     public async Task SetNoiseRemovalAsync(bool enabled, CancellationToken cancellationToken)
     {
+        if (_settings.UseIcueBroadcast)
+        {
+            await _icue.SetNoiseRemovalAsync(enabled, cancellationToken);
+            return;
+        }
+
         if (await _bridge.TrySetNoiseRemovalAsync(enabled, cancellationToken))
         {
             SaveDesiredState(enabled);
@@ -36,6 +47,11 @@ internal sealed class BroadcastController
 
     public async Task<bool?> GetNoiseRemovalStateAsync(CancellationToken cancellationToken)
     {
+        if (_settings.UseIcueBroadcast)
+        {
+            return await _icue.GetNoiseRemovalStateAsync(cancellationToken);
+        }
+
         var bridgeState = await _bridge.TryGetNoiseRemovalStateAsync(cancellationToken);
         if (bridgeState is not null)
         {
